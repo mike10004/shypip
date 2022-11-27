@@ -68,33 +68,36 @@ class LocalRepositoryServer(AbstractContextManager):
 
     def __exit__(self, __exc_type, __exc_value, __traceback):
         self.shutdown()
-        http_server = self.http_server
-        if http_server is not None:
-            http_server.__exit__(__exc_type, __exc_value, __traceback)
 
     def pretty_host(self) -> str:
         host = self.http_server.server_name
         url_host = f'[{host}]' if ':' in host else host
         return url_host
 
-    def url(self, path: str = "/", *more_path_components) -> str:
+    def url(self, path: str = "/", *more_path_components, **kwargs) -> str:
         all_path_components = [path] + list(more_path_components)
         full_path = '/'.join(all_path_components)
         if not full_path.startswith("/"):
             full_path = "/" + full_path
+        if 'host' in kwargs:
+            host = kwargs['host']
+        else:
+            host = self.pretty_host()
         # noinspection HttpUrlsUsage
-        return f"http://{self.pretty_host()}:{self.http_server.server_port}{full_path}"
+        scheme = kwargs.get('scheme', 'http')
+        return f"{scheme}://{host}:{self.http_server.server_port}{full_path}"
 
-    def start(self) -> threading.Thread:
+    def start(self) -> 'LocalRepositoryServer':
         http_server = self.http_server
         if http_server is None:
             raise LocalRepositoryStateException("server not created")
         t = threading.Thread(target=http_server.serve_forever)
         self.serving_thread = t
         t.start()
-        with socket.create_connection((http_server.server_name, http_server.server_port)):
+        address = (http_server.server_name, http_server.server_port)
+        with socket.create_connection(address):
             pass
-        return t
+        return self
 
     def shutdown(self, join_timeout: float = None):
         thread = self.serving_thread
@@ -102,5 +105,8 @@ class LocalRepositoryServer(AbstractContextManager):
             return
         http_server = self.http_server
         if http_server is not None:
-            http_server.shutdown()
+            try:
+                http_server.shutdown()
+            finally:
+                http_server.server_close()
         thread.join(timeout=join_timeout)
