@@ -13,7 +13,12 @@ from unittest import TestCase
 
 from shypip import Pathish
 from shypip.main import ERR_DEPENDENCY_SECURITY
+from shypip.main import ENV_CACHE
+from shypip.main import ENV_LOG_FILE
+from shypip.main import ENV_POPULARITY
+from shypip.main import Popularity
 from shypip.tests import LocalRepositoryServer
+from shypip.main import FilePypiStatsCache, ShypipOptions
 
 
 def main_file() -> str:
@@ -132,7 +137,7 @@ class MainTest(TestCase):
                     "download",
                     "--dest", tempdir,
                     "--progress-bar", "off",
-                    "sampleproject",
+                    "sampleproject>=1.9.0",
                     "--extra-index-url", server.url(host="localhost"),
                     "--trusted-host", f"localhost:{server.http_server.server_port}",
                 ]
@@ -190,8 +195,18 @@ class MainTest(TestCase):
             "--no-cache-dir",
         ]
 
+    def _prepare_cache_dir(self, cache_dir: Path, package_name: str, popularity: Popularity):
+        cache = FilePypiStatsCache(ShypipOptions(
+            cache_dir=str(cache_dir),
+        ))
+        cache.write_popularity(package_name, popularity)
+        self.assertIsNotNone(cache.read_cached_popularity(package_name))
+
     def test_query_popularity(self):
         with VirtualEnv() as virtual_env:
+            cache_dir = Path(virtual_env._tempdir.name) / "cache"
+            self._prepare_cache_dir(cache_dir, "sampleproject", Popularity(last_day=1, last_week=2, last_month=3))
+            log_file = Path(virtual_env._tempdir.name) / "shypip.log"
             with LocalRepositoryServer() as server:
                 server.start()
                 repo_url = server.url(host="localhost")
@@ -201,9 +216,17 @@ class MainTest(TestCase):
                 ] + self._common_pip_options() + [
                     "install",
                     "--progress-bar", "off",
-                    "sampleproject",
-                    "--index-url", repo_url,
+                    "sampleproject>=1.9.0",
+                    "--extra-index-url", repo_url,
                     "--trusted-host", f"localhost:{server.http_server.server_port}",
                 ]
-                proc = subprocess.run(cmd, capture_output=True, text=True)
+                env = self._env({
+                    ENV_CACHE: str(cache_dir),
+                    ENV_LOG_FILE: str(log_file),
+                })
+                proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
                 self.assertEqual(0, proc.returncode, f"subprocess fail: {proc.stderr}")
+                installed = virtual_env.list_installed_packages()
+                self.assertIn(("sampleproject", "1.9.0"), installed)
+                log_file_text = log_file.read_text()
+                self.assertIn("cache hit: sampleproject", log_file_text)
