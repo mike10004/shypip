@@ -36,8 +36,7 @@ from pip._internal.network.session import PipSession
 
 
 _PROG = "shypip"
-_THIS_MODULE = "shypip.main"
-ERR_DEPENDENCY_SECURITY = 2
+_THIS_MODULE = "shypip"
 _ENV_PREFIX = "SHYPIP_"
 ENV_UNTRUSTED = f"{_ENV_PREFIX}UNTRUSTED"
 ENV_POPULARITY = f"{_ENV_PREFIX}POPULARITY"
@@ -50,7 +49,7 @@ Pathish = Union[str, Path]
 class ShypipOptions(NamedTuple):
 
     untrusted_sources_spec: str = "pypi.org"
-    popularity_threshold_last_day: str = "100"
+    popularity_threshold: str = ""
     cache_dir: str = None
     pypistats_api_url: str = "https://pypistats.org/api"
     log_file: str = None
@@ -81,15 +80,20 @@ class ShypipOptions(NamedTuple):
     def create(getenv = os.getenv) -> 'ShypipOptions':
         return ShypipOptions(
             untrusted_sources_spec=getenv(ENV_UNTRUSTED, "pypi.org"),
-            popularity_threshold_last_day=getenv(ENV_POPULARITY, "100"),
+            popularity_threshold=getenv(ENV_POPULARITY, ""),
             cache_dir=getenv(ENV_CACHE, _default_cache_dir()),
             pypistats_api_url=getenv(ENV_PYPISTATS_API_URL, "https://pypistats.org/api"),
             log_file=getenv(ENV_LOG_FILE, None),
         )
 
+    def is_popularity_check_enabled(self) -> bool:
+        return True if self.popularity_threshold else False
+
     # noinspection PyUnusedLocal
     def is_popularity_satisfied(self, package_name: str, popularity: 'Popularity') -> bool:
-        return popularity.last_day >= int(self.popularity_threshold_last_day)
+        if not self.is_popularity_check_enabled():
+            return False
+        return popularity.last_day >= int(self.popularity_threshold)
 
 
 class Popularity(NamedTuple):
@@ -284,11 +288,15 @@ class ShyCandidateEvaluator(CandidateEvaluator, ShyMixin):
         result = super().compute_best_candidate(candidates)
         if result.best_candidate and self._shypip_options.is_untrusted(result.best_candidate):
             # noinspection PyProtectedMember
-            if self._is_ambiguous(result._applicable_candidates):
-                # refilter applicable candidates using popularity criteria
-                # noinspection PyProtectedMember
-                applicable_candidates = self._refilter_candidates(result._applicable_candidates)
-                best_candidate = self.sort_best_candidate(applicable_candidates)
+            applicable_candidates = result._applicable_candidates
+            if self._is_ambiguous(applicable_candidates):
+                if self._shypip_options.is_popularity_check_enabled():
+                    # refilter applicable candidates using popularity criteria
+                    applicable_candidates = self._refilter_candidates(applicable_candidates)
+                    best_candidate = self.sort_best_candidate(applicable_candidates)
+                else:
+                    self._require_unambiguous(applicable_candidates)
+                    raise NotImplementedError("BUG: unreachable")
                 return BestCandidateResult(
                     candidates,
                     applicable_candidates=applicable_candidates,
@@ -348,22 +356,18 @@ class ShyDownloadCommand(DownloadCommand, ShyMixin):
 def main(argv1: List[str] = None) -> int:
     import pip._internal.cli.main
     import pip._internal.commands
-    from pip._internal.commands import CommandInfo
-    pip._internal.commands.commands_dict["install"] = CommandInfo(
+    from pip._internal.commands import CommandInfo, commands_dict
+    commands_dict["install"] = CommandInfo(
         _THIS_MODULE,
         "ShyInstallCommand",
         "Install packages.",
     )
-    pip._internal.commands.commands_dict["download"] = CommandInfo(
+    commands_dict["download"] = CommandInfo(
         _THIS_MODULE,
         "ShyDownloadCommand",
         "Download packages.",
     )
-    try:
-        return pip._internal.cli.main.main(argv1)
-    except DependencySecurityException as e:
-        print(f"{_PROG}: {e}", file=sys.stderr)
-        return ERR_DEPENDENCY_SECURITY
+    return pip._internal.cli.main.main(argv1)
 
 
 if __name__ == '__main__':

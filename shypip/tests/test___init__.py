@@ -12,9 +12,9 @@ from typing import List, Dict, Tuple
 from unittest import TestCase
 
 from shypip import Pathish
-from shypip import ERR_DEPENDENCY_SECURITY
 from shypip import ENV_CACHE
 from shypip import ENV_LOG_FILE
+from shypip import ENV_POPULARITY
 from shypip import Popularity
 from shypip.tests import LocalRepositoryServer
 from shypip import ShypipOptions
@@ -165,11 +165,7 @@ class MainTest(TestCase):
                 cmd = [
                     virtual_env.python(),
                     main_file(),
-                    "--require-virtualenv",
-                    "--disable-pip-version-check",
-                    "--no-color",
-                    "--no-input",
-                    "--no-cache-dir",
+                ] + self._common_pip_options() + [
                     "install",
                     "--progress-bar", "off",
                     "sampleproject",
@@ -182,7 +178,7 @@ class MainTest(TestCase):
                     print(Path(shypip_log_file).read_text())
                 else:
                     print("no log file created")
-                self.assertEqual(ERR_DEPENDENCY_SECURITY, proc.returncode, f"Output from shypip:\n\n{proc.stdout}\n\n{proc.stderr}")
+                self.assertEqual(2, proc.returncode, f"Output from shypip:\n\n{proc.stdout}\n\n{proc.stderr}")
                 self.assertIn("MultipleRepositoryCandidatesException", proc.stderr, f"output does not indicate MultipleRepositoryCandidatesException was raised; installed: {packages_installed}")
 
     @staticmethod
@@ -223,6 +219,7 @@ class MainTest(TestCase):
                 env = self._env({
                     ENV_CACHE: str(cache_dir),
                     ENV_LOG_FILE: str(log_file),
+                    ENV_POPULARITY: str(100),
                 })
                 proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
                 self.assertEqual(0, proc.returncode, f"subprocess fail: {proc.stderr}")
