@@ -17,7 +17,7 @@ long_description = (here / "README.md").read_text(encoding="utf-8")
 
 setup(
     name="shypip",
-    version="0.1.0",
+    version="0.2.0",
     description="more secure pip for hybrid public-private repository configurations",
     long_description=long_description,
     long_description_content_type="text/markdown",
@@ -42,19 +42,12 @@ setup(
     packages=find_packages(where=os.getcwd()),  # Required
     python_requires=">=3.8, <4",
     install_requires=["pip~=22.3.1"],
-    # To provide executable scripts, use entry points in preference to the
-    # "scripts" keyword. Entry points provide cross-platform support and allow
-    # `pip` to create the appropriate form of executable for the target
-    # platform.
-    #
-    # For example, the following would provide a command called `sample` which
-    # executes the function `main` from this package when invoked:
-    entry_points={  # Optional
+    entry_points={
         "console_scripts": [
-            "shypip=shypip.main:main",
+            "shypip=shypip:main",
         ],
     },
-    project_urls={  # Optional
+    project_urls={
         "Bug Reports": "https://github.com/mike10004/shypip/issues",
         "Source": "https://github.com/mike10004/shypip/",
     },
