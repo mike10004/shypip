@@ -25,7 +25,7 @@ from pip._internal.models.selection_prefs import SelectionPreferences
 from pip._internal.commands.install import InstallCommand
 # noinspection PyProtectedMember
 from pip._internal.commands.download import DownloadCommand
-from typing import List, Any, Optional, Dict, Tuple
+from typing import List, Any, Optional, Dict, Tuple, TextIO
 from typing import NamedTuple
 from typing import Union
 
@@ -85,18 +85,6 @@ class ShypipOptions(NamedTuple):
     def create_pypistats_cache(self) -> 'PypiStatsCache':
         return FilePypiStatsCache(self)
 
-    @staticmethod
-    def create(getenv = os.getenv) -> 'ShypipOptions':
-        return ShypipOptions(
-            untrusted_sources_spec=getenv(ENV_UNTRUSTED, "pypi.org"),
-            popularity_threshold=getenv(ENV_POPULARITY, ""),
-            cache_dir=getenv(ENV_CACHE, _default_cache_dir()),
-            pypistats_api_url=getenv(ENV_PYPISTATS_API_URL, "https://pypistats.org/api"),
-            max_cache_age_minutes=getenv(ENV_MAX_CACHE_AGE, "1440"),
-            dump_config=getenv(ENV_DUMP_CONFIG, ""),
-            log_file=getenv(ENV_LOG_FILE, ""),
-        )
-
     def is_popularity_check_enabled(self) -> bool:
         try:
             return int(self.popularity_threshold) > 0
@@ -114,6 +102,34 @@ class ShypipOptions(NamedTuple):
             return timedelta(minutes=int(self.max_cache_age_minutes))
         except (TypeError, ValueError):
             return timedelta(hours=24)
+
+    @staticmethod
+    def create(getenv = os.getenv) -> 'ShypipOptions':
+        return ShypipOptions(
+            untrusted_sources_spec=getenv(ENV_UNTRUSTED, "pypi.org"),
+            popularity_threshold=getenv(ENV_POPULARITY, ""),
+            cache_dir=getenv(ENV_CACHE, _default_cache_dir()),
+            pypistats_api_url=getenv(ENV_PYPISTATS_API_URL, "https://pypistats.org/api"),
+            max_cache_age_minutes=getenv(ENV_MAX_CACHE_AGE, "1440"),
+            dump_config=getenv(ENV_DUMP_CONFIG, ""),
+            log_file=getenv(ENV_LOG_FILE, ""),
+        )
+
+    def print_config(self, ofile: TextIO = sys.stderr):
+        for field in self._fields:
+            docstring = ShypipOptions.__dict__[field].__doc__
+            env_var_name = docstring.split()[-1]
+            value = getattr(self, field)
+            print(f"{env_var_name}={value}", file=ofile)
+
+
+ShypipOptions.untrusted_sources_spec.__doc__ = f"untrusted sources (comma-delimited domains); set by {ENV_UNTRUSTED}"
+ShypipOptions.popularity_threshold.__doc__ = f"popularity threshold; set by {ENV_POPULARITY}"
+ShypipOptions.cache_dir.__doc__ = f"pypistats cache directory; set by {ENV_CACHE}"
+ShypipOptions.pypistats_api_url.__doc__ = f"pypistats API URL; set by {ENV_PYPISTATS_API_URL}"
+ShypipOptions.max_cache_age_minutes.__doc__ = f"max age in minutes for trusting pypistats cache data {ENV_MAX_CACHE_AGE}"
+ShypipOptions.dump_config.__doc__ = f"flag that specifies program should print config and exit; set by {ENV_DUMP_CONFIG}"
+ShypipOptions.log_file.__doc__ = f"pathname of log file to append to; set by {ENV_LOG_FILE}"
 
 
 class Popularity(NamedTuple):
@@ -407,9 +423,7 @@ class ShyDownloadCommand(DownloadCommand, ShyMixin):
 def main(argv1: List[str] = None, getenv = os.getenv) -> int:
     shypip_options = ShypipOptions.create(getenv)
     if str(shypip_options.dump_config).lower() in {"1", "true", "yes"}:
-        for field in shypip_options._fields:
-            value = getattr(shypip_options, field)
-            print(f"{field}={value}", file=sys.stderr)
+        shypip_options.print_config(sys.stderr)
         return 0
     import pip._internal.cli.main
     import pip._internal.commands

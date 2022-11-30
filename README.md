@@ -24,3 +24,7 @@ executed and a package dependency has installation candidates from multiple
 repositories, the installation will fail instead of pip selecting the candidate 
 with highest version.
 
+These environment variables are relevant to application behavior:
+
+* 
+
