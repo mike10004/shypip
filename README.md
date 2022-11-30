@@ -26,5 +26,10 @@ with highest version.
 
 These environment variables are relevant to application behavior:
 
-* 
-
+* SHYPIP_UNTRUSTED - comma delimited list of domains that are untrusted; default `pypi.org`
+* SHYPIP_POPULARITY - minimum number of downloads in last day to be eligible for installation; default is empty, which means popularity is not queried
+* SHYPIP_CACHE - pypistats cache directory; default is under system temp directory
+* SHYPIP_PYPISTATS_API_URL - pypistats API URL; default is `https://pypistats.org/api`
+* SHYPIP_MAX_CACHE_AGE - max age in minutes before pypistats cache files are considered stale; default is `1440`
+* SHYPIP_DUMP_CONFIG - if 1, print config to standard error and exit
+* SHYPIP_LOG_FILE - pathname of log file to append to
