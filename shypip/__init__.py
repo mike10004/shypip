@@ -144,6 +144,18 @@ class PypiStatsCache(object):
     def query_popularity(self, package_name: str) -> Popularity:
         raise NotImplementedError("abstract")
 
+    @staticmethod
+    def is_query_supported(candidate_link_comes_from: str) -> bool:
+        # noinspection PyBroadException
+        try:
+            if candidate_link_comes_from:
+                parsed_url = urllib.parse.urlparse(candidate_link_comes_from)
+                return parsed_url.netloc == "pypi.org"
+        except:
+            pass
+        return False
+
+
 class FilePypiStatsCache(PypiStatsCache):
 
     def __init__(self, shypip_options: ShypipOptions):
@@ -274,8 +286,6 @@ class ShyMixin(object):
 
 class ShyCandidateEvaluator(CandidateEvaluator, ShyMixin):
 
-    pypistats_cache: Optional[PypiStatsCache] = None
-
     # noinspection PyMethodMayBeStatic
     def _is_ambiguous(self, candidates: List[InstallationCandidate]):
         candidate_origin_counts = count_candidate_origins(candidates)
@@ -291,6 +301,10 @@ class ShyCandidateEvaluator(CandidateEvaluator, ShyMixin):
             counts = ", ".join(f"{count} candidate(s) from {domain}" for domain, count in candidate_origin_counts.items())
             raise MultipleRepositoryCandidatesException(f"multiple possible repository sources for {project_name}: {counts}")
 
+    @cached_property
+    def pypistats_cache(self) -> PypiStatsCache:
+        return self._shypip_options.create_pypistats_cache()
+
     def _refilter_candidates(self, candidates: List[InstallationCandidate]) -> List[InstallationCandidate]:
         if not candidates:
             return []
@@ -302,16 +316,16 @@ class ShyCandidateEvaluator(CandidateEvaluator, ShyMixin):
         def get_popularity():
             nonlocal popularity
             if popularity is None:
-                if self.pypistats_cache is None:
-                    self.pypistats_cache = self._shypip_options.create_pypistats_cache()
                 popularity = self.pypistats_cache.query_popularity(package_name)
             return popularity
 
         for candidate in candidates:
             if is_package_repo_candidate(candidate):
                 if self._shypip_options.is_untrusted(candidate):
-                    if self._shypip_options.is_popularity_satisfied(package_name, get_popularity()):
-                        filtered.append(candidate)
+                    # ignore if it's from an untrusted source whose popularity can't be queried
+                    if self.pypistats_cache.is_query_supported(candidate.link.comes_from):
+                        if self._shypip_options.is_popularity_satisfied(package_name, get_popularity()):
+                            filtered.append(candidate)
                 else:
                     filtered.append(candidate)
             else:
