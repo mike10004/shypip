@@ -3,7 +3,11 @@
 import json
 import os
 import sys
+import tempfile
 import urllib.parse
+from datetime import timedelta
+from datetime import datetime
+from datetime import timezone
 from functools import cached_property
 from pathlib import Path
 from collections import defaultdict
@@ -43,16 +47,21 @@ ENV_POPULARITY = f"{_ENV_PREFIX}POPULARITY"
 ENV_CACHE = f"{_ENV_PREFIX}CACHE"
 ENV_LOG_FILE = f"{_ENV_PREFIX}LOG_FILE"
 ENV_PYPISTATS_API_URL = f"{_ENV_PREFIX}PYPISTATS_API_URL"
+ENV_MAX_CACHE_AGE = f"{_ENV_PREFIX}MAX_CACHE_AGE"
+ENV_DUMP_CONFIG = f"{_ENV_PREFIX}DUMP_CONFIG"
 Pathish = Union[str, Path]
+DEFAULT_MAX_CACHE_AGE = timedelta(hours=24)
 
 
 class ShypipOptions(NamedTuple):
 
     untrusted_sources_spec: str = "pypi.org"
     popularity_threshold: str = ""
-    cache_dir: str = None
+    cache_dir: str = ""
     pypistats_api_url: str = "https://pypistats.org/api"
-    log_file: str = None
+    max_cache_age_minutes: str = "1440"
+    dump_config: str = ""
+    log_file: str = ""
 
     def log(self, *messages):
         if self.log_file:
@@ -71,7 +80,7 @@ class ShypipOptions(NamedTuple):
             return parsed_origin.netloc in self.untrusted_sources()
 
     def cache_dir_path(self) -> Path:
-        return Path(self.cache_dir)
+        return Path(self.cache_dir or _default_cache_dir())
 
     def create_pypistats_cache(self) -> 'PypiStatsCache':
         return FilePypiStatsCache(self)
@@ -83,17 +92,28 @@ class ShypipOptions(NamedTuple):
             popularity_threshold=getenv(ENV_POPULARITY, ""),
             cache_dir=getenv(ENV_CACHE, _default_cache_dir()),
             pypistats_api_url=getenv(ENV_PYPISTATS_API_URL, "https://pypistats.org/api"),
-            log_file=getenv(ENV_LOG_FILE, None),
+            max_cache_age_minutes=getenv(ENV_MAX_CACHE_AGE, "1440"),
+            dump_config=getenv(ENV_DUMP_CONFIG, ""),
+            log_file=getenv(ENV_LOG_FILE, ""),
         )
 
     def is_popularity_check_enabled(self) -> bool:
-        return True if self.popularity_threshold else False
+        try:
+            return int(self.popularity_threshold) > 0
+        except (TypeError, ValueError):
+            return False
 
     # noinspection PyUnusedLocal
     def is_popularity_satisfied(self, package_name: str, popularity: 'Popularity') -> bool:
         if not self.is_popularity_check_enabled():
             return False
         return popularity.last_day >= int(self.popularity_threshold)
+
+    def max_cache_age(self) -> timedelta:
+        try:
+            return timedelta(minutes=int(self.max_cache_age_minutes))
+        except (TypeError, ValueError):
+            return timedelta(hours=24)
 
 
 class Popularity(NamedTuple):
@@ -113,8 +133,11 @@ class PypiStatsResponse(NamedTuple):
         return Popularity(**self.data)
 
 
-def _default_cache_dir() -> Path:
-    return Path("~").expanduser() / ".cache" / "shypip"
+def _default_cache_dir(now: datetime = None) -> Path:
+    now = now or datetime.now()
+    timestamp = now.strftime("%Y%m%d")
+    return Path(tempfile.gettempdir()) / f"shypip-cache-{timestamp}"
+
 
 class PypiStatsCache(object):
 
@@ -161,18 +184,32 @@ class FilePypiStatsCache(PypiStatsCache):
         # TODO check whether a package_name is always a safe filename stem
         return self.shypip_options.cache_dir_path() / "popularity" / f"{package_name}.json"
 
-    def read_cached_popularity(self, package_name: str) -> Optional[Popularity]:
+    # noinspection PyMethodMayBeStatic
+    def _now(self) -> datetime:
+        return datetime.now(tz=timezone.utc)
+
+    def _is_fresh(self, stat_mtime: float, max_age: timedelta = None) -> bool:
+        max_age = max_age if max_age is not None else self.shypip_options.max_cache_age()
+        last_modified = datetime.fromtimestamp(stat_mtime, tz=timezone.utc)
+        now = self._now()
+        return (now - last_modified) <= max_age
+
+    def read_cached_popularity(self, package_name: str, max_age: timedelta = None) -> Optional[Popularity]:
         popularity_file = self._popularity_file(package_name)
+        miss_reason = ""
         try:
-            with open(popularity_file, "r") as ifile:
-                popularity_dict = json.load(ifile)
-            popularity = Popularity(**popularity_dict)
-            self.shypip_options.log("cache hit:", package_name, popularity)
-            return popularity
+            if popularity_file.exists():
+                if not self._is_fresh(popularity_file.stat().st_mtime, max_age):
+                    return None
+                with open(popularity_file, "r") as ifile:
+                    popularity_dict = json.load(ifile)
+                popularity = Popularity(**popularity_dict)
+                self.shypip_options.log("cache hit:", package_name, popularity)
+                return popularity
         except (FileNotFoundError, json.JSONDecodeError, TypeError) as e:
-            if isinstance(e, FileNotFoundError):
-                self.shypip_options.log("cache miss:", package_name)
-            return None
+            miss_reason = f" ({str(type(e))})"
+        self.shypip_options.log(f"cache miss{miss_reason}:", package_name)
+        return None
 
 
 class DependencySecurityException(Exception):
@@ -353,7 +390,13 @@ class ShyDownloadCommand(DownloadCommand, ShyMixin):
 
 
 # noinspection PyProtectedMember
-def main(argv1: List[str] = None) -> int:
+def main(argv1: List[str] = None, getenv = os.getenv) -> int:
+    shypip_options = ShypipOptions.create(getenv)
+    if str(shypip_options.dump_config).lower() in {"1", "true", "yes"}:
+        for field in shypip_options._fields:
+            value = getattr(shypip_options, field)
+            print(f"{field}={value}", file=sys.stderr)
+        return 0
     import pip._internal.cli.main
     import pip._internal.commands
     from pip._internal.commands import CommandInfo, commands_dict

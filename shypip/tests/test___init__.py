@@ -3,8 +3,11 @@
 import contextlib
 import io
 import os
+import re
 import platform
 import subprocess
+import tempfile
+import datetime
 from tempfile import TemporaryDirectory
 from contextlib import AbstractContextManager
 from pathlib import Path
@@ -227,3 +230,27 @@ class MainTest(TestCase):
                 self.assertIn(("sampleproject", "1.9.0"), installed)
                 log_file_text = log_file.read_text()
                 self.assertIn("cache hit: sampleproject", log_file_text)
+
+
+class FilePypiStatsCacheTest(TestCase):
+
+    def test__is_fresh(self):
+        cache = FilePypiStatsCache(ShypipOptions(max_cache_age_minutes="1440"))
+        with tempfile.TemporaryDirectory() as tempdir:
+            pathname = Path(tempdir) / "foo.txt"
+            with open(pathname, "wb") as ofile:
+                ofile.write(b'')
+            actual = cache._is_fresh(pathname.stat().st_mtime)
+        self.assertTrue(actual)
+        two_days_ago = datetime.datetime.now(tz=datetime.timezone.utc) - datetime.timedelta(hours=26)
+        self.assertFalse(cache._is_fresh(two_days_ago.timestamp()), f"expect not fresh: {two_days_ago}")
+
+
+class ShypipOptionsTest(TestCase):
+
+    def test_create(self):
+        env = {
+
+        }
+        s = ShypipOptions.create(env.get)
+        self.assertRegex(s.cache_dir_path().name, r'^shypip-cache-\d{8}$')
