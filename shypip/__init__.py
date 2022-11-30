@@ -2,6 +2,7 @@
 
 import json
 import os
+import platform
 import sys
 import tempfile
 import urllib.parse
@@ -150,6 +151,10 @@ class PypiStatsResponse(NamedTuple):
 
 
 def _default_cache_dir(now: datetime = None) -> Path:
+    if platform.system() != "Windows":
+        home_cache_dir = Path("~").expanduser() / ".cache" / "shypip"
+        if home_cache_dir.is_dir():
+            return home_cache_dir
     now = now or datetime.now()
     timestamp = now.strftime("%Y%m%d")
     return Path(tempfile.gettempdir()) / f"shypip-cache-{timestamp}"
