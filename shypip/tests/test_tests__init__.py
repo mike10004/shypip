@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
-import requests
-
+import urllib.request
 from shypip.tests import LocalRepositoryServer
 from unittest import TestCase
 
@@ -13,6 +12,6 @@ class LocalRepositoryServerTest(TestCase):
         with LocalRepositoryServer() as server:
             server.start()
             readme_url = server.url("/README.txt")
-            with requests.get(readme_url) as rsp:
-                content = rsp.text
+            with urllib.request.urlopen(readme_url) as rsp:
+                content = rsp.read().decode('utf8')
                 self.assertEqual("Local repository for testing", content.strip())
