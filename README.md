@@ -114,4 +114,11 @@ and installed, because it meets the popularity threshold of 1000 downloads
 in the last day.
 
     
+# Known Issues
+
+* relies on internal API of pip~=22.3.1, so compatibility is limited
+* does not protect against typosquatting or bad dependency declaration; will 
+  allow installation of package from public (untrusted) repository if no 
+  package that satisfies a requiremeent is available from the private 
+  (trusted) repository
 
