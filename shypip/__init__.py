@@ -26,7 +26,7 @@ from pip._internal.models.selection_prefs import SelectionPreferences
 from pip._internal.commands.install import InstallCommand
 # noinspection PyProtectedMember
 from pip._internal.commands.download import DownloadCommand
-from typing import List, Any, Optional, Dict, Tuple, TextIO
+from typing import List, Any, Optional, Dict, Tuple, TextIO, FrozenSet, Iterator, Iterable
 from typing import NamedTuple
 from typing import Union
 
@@ -38,7 +38,6 @@ from pip._internal.models.candidate import InstallationCandidate
 from pip._internal.models.target_python import TargetPython
 # noinspection PyProtectedMember
 from pip._internal.network.session import PipSession
-
 
 _PROG = "shypip"
 _THIS_MODULE = "shypip"
@@ -262,15 +261,6 @@ def is_package_repo_candidate(candidate: InstallationCandidate):
     return origin.scheme in {'http', 'https'}
 
 
-def count_candidate_origins(candidates: List[InstallationCandidate]) -> Dict[str, int]:
-    num_candidates_by_package_repo_domain = defaultdict(int)
-    candidates = list(filter(is_package_repo_candidate, candidates))
-    for candidate in candidates:
-        origin = urllib.parse.urlparse(candidate.link.comes_from)
-        num_candidates_by_package_repo_domain[origin.netloc] += 1
-    return num_candidates_by_package_repo_domain
-
-
 class ShyMixin(object):
 
     @cached_property
@@ -304,23 +294,72 @@ class ShyMixin(object):
             target_python=target_python,
         )
 
+class ResolvedPackage(NamedTuple):
+
+    name: str
+    version: str
+    comes_from: str
+    url: str
+
+    @staticmethod
+    def from_candidate(candidate: InstallationCandidate) -> 'ResolvedPackage':
+        return ResolvedPackage(candidate.name, str(candidate.version), candidate.link.comes_from, candidate.link.url)
+
+class CandidateOriginAnalysis(NamedTuple):
+
+    by_origin: FrozenSet[Tuple[str, Tuple[ResolvedPackage, ...]]]
+
+    def to_dict(self) -> Dict[str, List[ResolvedPackage]]:
+        return dict((k, list(v)) for k, v in self.by_origin)
+
+    def origins(self) -> Iterator[str]:
+        for origin, _ in self.by_origin:
+            yield origin
+
+    def get_candidates(self, origin: str) -> Tuple[ResolvedPackage, ...]:
+        for key, candidates in self.by_origin:
+            if origin == key:
+                return candidates
+        raise KeyError("origin not present")
+
+    def origin_count(self) -> int:
+        return len(self.by_origin)
+
+    def summarize(self) -> str:
+        return ", ".join(f"{len(candidates)} candidate(s) from {domain}" for domain, candidates in self.by_origin)
+
+    @staticmethod
+    def analyze(candidates: Iterable[InstallationCandidate]) -> 'CandidateOriginAnalysis':
+        candidates_by_package_repo_domain = defaultdict(list)
+        candidates = list(filter(is_package_repo_candidate, candidates))
+        for candidate in candidates:
+            origin = urllib.parse.urlparse(candidate.link.comes_from)
+            package = ResolvedPackage.from_candidate(candidate)
+            candidates_by_package_repo_domain[origin.netloc].append(package)
+        return CandidateOriginAnalysis(frozenset((k, tuple(v)) for k, v in candidates_by_package_repo_domain.items()))
+
+    def empty(self) -> bool:
+        return len(self.by_origin) == 0
+
+    def is_ambiguous(self) -> bool:
+        return self.origin_count() > 1
+
+    def package_name(self) -> str:
+        package_names = set()
+        for _, candidates in self.by_origin:
+            package_names.update(set(candidate.name for candidate in candidates))
+        if not package_names:
+            raise ValueError("empty")
+        if len(package_names) > 1:
+            raise ValueError(f"multiple package names: {package_names}")
+        return package_names.pop()
+
+    def assert_unambiguous(self):
+        if self.is_ambiguous():
+            raise MultipleRepositoryCandidatesException(f"multiple possible repository sources for {self.package_name()}: {self.summarize()}")
+
 
 class ShyCandidateEvaluator(CandidateEvaluator, ShyMixin):
-
-    # noinspection PyMethodMayBeStatic
-    def _is_ambiguous(self, candidates: List[InstallationCandidate]):
-        candidate_origin_counts = count_candidate_origins(candidates)
-        return len(candidate_origin_counts.keys()) > 1
-
-    # noinspection PyMethodMayBeStatic
-    def _require_unambiguous(self, candidates: List[InstallationCandidate]):
-        if not candidates:
-            return
-        candidate_origin_counts = count_candidate_origins(candidates)
-        project_name = set(candidate.name for candidate in candidates).pop()
-        if len(candidate_origin_counts.keys()) > 1:
-            counts = ", ".join(f"{count} candidate(s) from {domain}" for domain, count in candidate_origin_counts.items())
-            raise MultipleRepositoryCandidatesException(f"multiple possible repository sources for {project_name}: {counts}")
 
     @cached_property
     def pypistats_cache(self) -> PypiStatsCache:
@@ -351,23 +390,26 @@ class ShyCandidateEvaluator(CandidateEvaluator, ShyMixin):
                     filtered.append(candidate)
             else:
                 filtered.append(candidate)
+        self._shypip_options.log(len(candidates), " candidates popularity-filtered to", len(filtered))
         return filtered
 
-    def compute_best_candidate(
-            self,
-            candidates: List[InstallationCandidate],
-        ) -> BestCandidateResult:
+    def compute_best_candidate(self, candidates: List[InstallationCandidate]) -> BestCandidateResult:
         result = super().compute_best_candidate(candidates)
         if result.best_candidate and self._shypip_options.is_untrusted(result.best_candidate):
             # noinspection PyProtectedMember
             applicable_candidates = result._applicable_candidates
-            if self._is_ambiguous(applicable_candidates):
+            analysis = CandidateOriginAnalysis.analyze(applicable_candidates)
+            self._shypip_options.log(result.best_candidate.name, "best candidate is version", result.best_candidate.version)
+            if analysis.is_ambiguous():
+                self._shypip_options.log(result.best_candidate.name, "is provided by multiple sources; candidates by origin:", analysis.to_dict())
                 if self._shypip_options.is_popularity_check_enabled():
                     # refilter applicable candidates using popularity criteria
                     applicable_candidates = self._refilter_candidates(applicable_candidates)
                     best_candidate = self.sort_best_candidate(applicable_candidates)
+                    self._shypip_options.log("best candidate after filtering:", best_candidate)
                 else:
-                    self._require_unambiguous(applicable_candidates)
+                    self._shypip_options.log("aborting due to resolution ambiguity")
+                    analysis.assert_unambiguous()
                     raise NotImplementedError("BUG: unreachable")
                 return BestCandidateResult(
                     candidates,
