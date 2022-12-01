@@ -390,7 +390,7 @@ class ShyCandidateEvaluator(CandidateEvaluator, ShyMixin):
                     filtered.append(candidate)
             else:
                 filtered.append(candidate)
-        self._shypip_options.log(len(candidates), " candidates popularity-filtered to", len(filtered))
+        self._shypip_options.log(len(candidates), "candidates popularity-filtered by threshold", self._shypip_options.popularity_threshold, "to", len(filtered))
         return filtered
 
     def compute_best_candidate(self, candidates: List[InstallationCandidate]) -> BestCandidateResult:
