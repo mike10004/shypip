@@ -83,6 +83,27 @@ class PopularityThreshold(NamedTuple):
 
     def is_enabled(self) -> bool:
         return self.minimums.last_day >=0 or self.minimums.last_week >= 0 or self.minimums.last_month >= 0
+    
+    @staticmethod
+    def parse(token: str) -> 'PopularityThreshold':
+        if not token:
+            return PopularityThreshold(Popularity(-1, -1, -1), all)
+        try:
+            value = int(token)
+            return PopularityThreshold(Popularity(last_day=value, last_week=value, last_month=value), all)
+        except (TypeError, ValueError):
+            pass
+        junction = all
+        offset = 0
+        if token.startswith("or:"):
+            junction = any
+            offset = len("or:")
+        elif token.startswith("and:"):
+            junction = all
+            offset = len("and:")
+        parameters = urllib.parse.parse_qs(token[offset:])
+        minimums = Popularity(**parameters)
+        return PopularityThreshold(minimums, junction)
 
 
 class ShypipOptions(NamedTuple):
@@ -118,27 +139,7 @@ class ShypipOptions(NamedTuple):
         return FilePypiStatsCache(self)
 
     def is_popularity_check_enabled(self) -> bool:
-        return self.parse_popularity_threshold().is_enabled()
-
-    def parse_popularity_threshold(self) -> PopularityThreshold:
-        if not self.popularity_threshold:
-            return PopularityThreshold(Popularity(-1, -1, -1), all)
-        try:
-            last_day = int(self.popularity_threshold)
-            return PopularityThreshold(Popularity(last_day=last_day, last_week=0, last_month=0), all)
-        except (TypeError, ValueError):
-            pass
-        junction = all
-        offset = 0
-        if self.popularity_threshold.startswith("or:"):
-            junction = any
-            offset = len("or:")
-        elif self.popularity_threshold.startswith("and:"):
-            junction = all
-            offset = len("and:")
-        parameters = urllib.parse.parse_qs(self.popularity_threshold[offset:])
-        minimums = Popularity(**parameters)
-        return PopularityThreshold(minimums, junction)
+        return PopularityThreshold.parse(self.popularity_threshold).is_enabled()
 
     def max_cache_age(self) -> timedelta:
         try:
@@ -422,7 +423,7 @@ class ShyCandidateEvaluator(CandidateEvaluator, ShyMixin):
             if popularity is None:
                 popularity = self.pypistats_cache.query_popularity(package_name)
             return popularity
-        threshold = self._shypip_options.parse_popularity_threshold()
+        threshold = PopularityThreshold.parse(self._shypip_options.popularity_threshold)
         for candidate in candidates:
             if is_package_repo_candidate(candidate):
                 if self._shypip_options.is_untrusted(candidate):

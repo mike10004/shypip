@@ -3,7 +3,6 @@
 """Common testing utilities."""
 
 import io
-import os
 import socket
 import platform
 import threading
@@ -17,9 +16,8 @@ from http.server import ThreadingHTTPServer
 from http.server import _get_best_family
 from contextlib import AbstractContextManager
 from functools import partial
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Any
 from shypip import Pathish
-import contextlib
 import logging
 
 
@@ -28,10 +26,23 @@ _log = logging.getLogger(__name__)
 
 class QuietHTTPRequestHandler(SimpleHTTPRequestHandler):
 
+    quiet_codes = {HTTPStatus.NOT_FOUND}
+
     def log_request(self, code='-', size='-'):
         if isinstance(code, HTTPStatus):
             code = code.value
         _log.debug('%s "%s" %s %s', self.address_string(), self.requestline, str(code), str(size))
+
+    def _is_quiet(self, fmt, args: Tuple) -> bool:
+        if fmt == "code %d, message %s":
+            if len(args) == 2 and isinstance(args[0], HTTPStatus) and args[0] in self.quiet_codes:
+                return True
+        return False
+
+    def log_error(self, fmt: str, *args: Any):
+        if self._is_quiet(fmt, args):
+            return
+        super().log_error(fmt, *args)
 
 
 # noinspection PyPep8Naming

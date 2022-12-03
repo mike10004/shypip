@@ -50,7 +50,7 @@ class MainTest(TestCase):
     def test_install_rejects_ambiguous_dependency(self):
         with VirtualEnv() as virtual_env:
             packages_installed = virtual_env.list_installed_packages()
-            shypip_log_file = Path(virtual_env._tempdir.name) / "shypip.log"
+            log_file = Path(virtual_env._tempdir.name) / "shypip.log"
             with LocalRepositoryServer() as server:
                 server.start()
                 repo_url = server.url(host="localhost")
@@ -62,19 +62,28 @@ class MainTest(TestCase):
                 ])
                 env = self._env({
                     "SHYPIP_POPULARITY": "-1",  # disable popularity check
-                    "SHYPIP_LOG_FILE": str(shypip_log_file)
+                    "SHYPIP_LOG_FILE": str(log_file)
                 })
                 proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
-                if shypip_log_file.is_file():
-                    if self.VERBOSE_LOG:
-                        print(Path(shypip_log_file).read_text())
-                else:
-                    print("no log file created")
-                self.assertEqual(1, proc.returncode, f"unexpected exit code from shypip:\n\n{proc.stdout}\n\n{proc.stderr}")
-                stderr_lines = [line for line in io.StringIO(proc.stderr)]
-                self.assertIn(MULTIPLE_SOURCES_MESSAGE_PREFIX, proc.stderr, f"output does not contain expected error message text ({repr(MULTIPLE_SOURCES_MESSAGE_PREFIX)}; installed: {packages_installed}:\n\n{proc.stderr}")
-                self.assertLessEqual(len(stderr_lines), 5, f"expect <= 5 lines of output:\n\n{proc.stderr}")
+                passed = False
+                try:
+                    self.assertEqual(1, proc.returncode, f"unexpected exit code from shypip:\n\n{proc.stdout}\n\n{proc.stderr}")
+                    stderr_lines = [line for line in io.StringIO(proc.stderr)]
+                    self.assertIn(MULTIPLE_SOURCES_MESSAGE_PREFIX, proc.stderr, f"output does not contain expected error message text ({repr(MULTIPLE_SOURCES_MESSAGE_PREFIX)}; installed: {packages_installed}:\n\n{proc.stderr}")
+                    self.assertLessEqual(len(stderr_lines), 5, f"expect <= 5 lines of output:\n\n{proc.stderr}")
+                    actual_packages_installed = virtual_env.list_installed_packages()
+                    self.assertSetEqual(set(packages_installed), set(actual_packages_installed))
+                    passed = True
+                finally:
+                    self._print_log(log_file, not passed)
 
+
+    def _print_log(self, shypip_log_file: Path, always: bool = False):
+        if always or self.VERBOSE_LOG:
+            if shypip_log_file.is_file():
+                print(Path(shypip_log_file).read_text())
+            else:
+                print("no log to print")
 
     def _prepare_cache_dir(self, cache_dir: Path, package_name: str, popularity: Popularity):
         cache = FilePypiStatsCache(ShypipOptions(
@@ -104,8 +113,13 @@ class MainTest(TestCase):
                     ENV_POPULARITY: str(100),
                 })
                 proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
-                self.assertEqual(0, proc.returncode, f"subprocess fail: {proc.stderr}")
-                installed = virtual_env.list_installed_packages()
-                self.assertIn(("sampleproject", "1.9.0"), installed)
-                log_file_text = log_file.read_text()
-                self.assertIn("cache hit: sampleproject", log_file_text)
+                passed = False
+                try:
+                    self.assertEqual(0, proc.returncode, f"subprocess fail: {proc.stderr}")
+                    installed = virtual_env.list_installed_packages()
+                    self.assertIn(("sampleproject", "1.9.0"), installed)
+                    log_file_text = log_file.read_text()
+                    self.assertIn("cache hit: sampleproject", log_file_text)
+                    passed = True
+                finally:
+                    self._print_log(log_file, not passed)
