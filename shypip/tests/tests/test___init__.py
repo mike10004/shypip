@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+"""Tests of shypip.tests.__init__.py"""
+
 import urllib.request
 from shypip.tests import LocalRepositoryServer
 from unittest import TestCase
