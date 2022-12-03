@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 
 """Common testing utilities."""
+
+import io
 import socket
+import platform
 import threading
+import subprocess
+from tempfile import TemporaryDirectory
 from pathlib import Path
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler
@@ -11,7 +16,7 @@ from http.server import ThreadingHTTPServer
 from http.server import _get_best_family
 from contextlib import AbstractContextManager
 from functools import partial
-from typing import Optional
+from typing import Optional, List, Tuple
 from shypip import Pathish
 import logging
 
@@ -110,3 +115,103 @@ class LocalRepositoryServer(AbstractContextManager):
             finally:
                 http_server.server_close()
         thread.join(timeout=join_timeout)
+
+
+def main_file() -> str:
+    this_file = Path(__file__).absolute()
+    return str(this_file.parent.parent / "__init__.py")
+
+
+class VirtualEnvException(Exception):
+    pass
+
+
+class VenvCreator(object):
+
+    def create(self, venv_dir: Pathish):
+        raise NotImplementedError("abstract")
+
+
+def _system_python() -> str:
+    import shutil
+    python_exe_path = shutil.which("python")
+    return str(Path(python_exe_path).resolve())
+
+
+class SubprocessVenvCreator(VenvCreator):
+
+    def create(self, venv_dir: Pathish):
+        proc = subprocess.run([
+            _system_python(),
+            "-m", "venv",
+            str(venv_dir)
+        ], capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise VirtualEnvException(f"failed to create virtual environment in {venv_dir}: {proc.stderr}")
+
+
+class ModuleVenvCreator(VenvCreator):
+
+    def create(self, venv_dir: Pathish):
+        import venv
+        venv.main([
+            str(venv_dir),
+        ])
+
+
+class VirtualEnv(AbstractContextManager):
+
+    def __init__(self):
+        self._tempdir = None
+        self._venv_creator = SubprocessVenvCreator()
+
+    def __enter__(self) -> 'VirtualEnv':
+        self._tempdir = TemporaryDirectory(prefix="shypiptest_")
+        self.venv_dir = Path(self._tempdir.name) / "venv"
+        try:
+            self._venv_creator.create(self.venv_dir)
+            self.install("pip~=22.3.1")
+        except:
+            self._tempdir.cleanup()
+            raise
+        return self
+
+    def __exit__(self, et, ev, tb):
+        if self._tempdir is not None:
+            self._tempdir.cleanup()
+        super().__exit__(et, ev, tb)
+
+    def python(self) -> str:
+        bin_dir = "Scripts" if platform.system() == "Windows" else "bin"
+        return str(self.venv_dir / bin_dir / "python")
+
+    def install(self, requirement: str):
+        cmd = [
+            self.python(), "-m", "pip", "--quiet", "--no-input", "install", requirement
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise VirtualEnvException(f"pip install exit {proc.returncode}: {proc.stderr}")
+
+    def list_installed_packages(self) -> List[Tuple[str, str]]:
+        cmd = [
+            self.python(),
+            "-m", "pip", "list"
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise VirtualEnvException(f"pip list terminated with exit code {proc.returncode}: {proc.stderr}")
+        def to_package_spec(line: str):
+            package_name, version = line.rstrip().split()
+            return package_name, version
+        return [to_package_spec(line) for line in io.StringIO(proc.stdout)][2:]
+
+
+def maybe_read_text(pathname: Pathish) -> str:
+    """Read text from a file, if the file exists."""
+    try:
+        return Path(pathname).read_text("utf-8")
+    except FileNotFoundError:
+        return ""
+
+

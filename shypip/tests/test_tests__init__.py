@@ -5,7 +5,6 @@ from shypip.tests import LocalRepositoryServer
 from unittest import TestCase
 
 
-
 class LocalRepositoryServerTest(TestCase):
 
     def test_start(self):
@@ -13,5 +12,5 @@ class LocalRepositoryServerTest(TestCase):
             server.start()
             readme_url = server.url("/README.txt")
             with urllib.request.urlopen(readme_url) as rsp:
-                content = rsp.read().decode('utf8')
+                content = rsp.read().decode('utf-8')
                 self.assertEqual("Local repository for testing", content.strip())
