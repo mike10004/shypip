@@ -28,7 +28,7 @@ from pip._internal.models.selection_prefs import SelectionPreferences
 from pip._internal.commands.install import InstallCommand
 # noinspection PyProtectedMember
 from pip._internal.commands.download import DownloadCommand
-from typing import List, Any, Optional, Dict, Tuple, TextIO, FrozenSet, Iterator, Iterable
+from typing import List, Any, Optional, Dict, Tuple, TextIO, FrozenSet, Iterator, Iterable, Callable
 from typing import NamedTuple
 from typing import Union
 
@@ -56,10 +56,39 @@ Pathish = Union[str, Path]
 DEFAULT_MAX_CACHE_AGE = timedelta(hours=24)
 
 
+class Popularity(NamedTuple):
+
+    last_day: int = 0
+    last_week: int = 0
+    last_month: int = 0
+
+
+Junction = Callable[[Iterable[bool]], bool]  # function like 'any' or 'all'
+
+class PopularityThreshold(NamedTuple):
+
+    minimums: Popularity
+    junction: Junction
+
+    def evaluate_field(self, field: str, popularity: Popularity) -> bool:
+        if self.minimums.__getattribute__(field) < 0:
+            return False
+        return popularity.__getattribute__(field) >= self.minimums.__getattribute__(field)
+
+    def evaluate(self, popularity: Popularity) -> bool:
+        evaluations = []
+        for field in popularity._fields:
+            evaluations.append(self.evaluate_field(field, popularity))
+        return self.junction(evaluations)
+
+    def is_enabled(self) -> bool:
+        return self.minimums.last_day >=0 or self.minimums.last_week >= 0 or self.minimums.last_month >= 0
+
+
 class ShypipOptions(NamedTuple):
 
     untrusted_sources_spec: str = "pypi.org"
-    popularity_threshold: str = ""
+    popularity_threshold: str = "1_000_000"
     cache_dir: str = ""
     pypistats_api_url: str = "https://pypistats.org/api"
     max_cache_age_minutes: str = "1440"
@@ -82,6 +111,7 @@ class ShypipOptions(NamedTuple):
             parsed_origin = urllib.parse.urlparse(candidate.link.comes_from)
             return parsed_origin.netloc in self.untrusted_sources()
 
+    @cached_property
     def cache_dir_path(self) -> Path:
         return Path(self.cache_dir or _default_cache_dir())
 
@@ -89,16 +119,27 @@ class ShypipOptions(NamedTuple):
         return FilePypiStatsCache(self)
 
     def is_popularity_check_enabled(self) -> bool:
-        try:
-            return int(self.popularity_threshold) > 0
-        except (TypeError, ValueError):
-            return False
+        return self.parse_popularity_threshold().is_enabled()
 
-    # noinspection PyUnusedLocal
-    def is_popularity_satisfied(self, package_name: str, popularity: 'Popularity') -> bool:
-        if not self.is_popularity_check_enabled():
-            return False
-        return popularity.last_day >= int(self.popularity_threshold)
+    def parse_popularity_threshold(self) -> PopularityThreshold:
+        if not self.popularity_threshold:
+            return PopularityThreshold(Popularity(-1, -1, -1), all)
+        try:
+            last_day = int(self.popularity_threshold)
+            return PopularityThreshold(Popularity(last_day=last_day, last_week=0, last_month=0), all)
+        except (TypeError, ValueError):
+            pass
+        junction = all
+        offset = 0
+        if self.popularity_threshold.startswith("or:"):
+            junction = any
+            offset = len("or:")
+        elif self.popularity_threshold.startswith("and:"):
+            junction = all
+            offset = len("and:")
+        parameters = urllib.parse.parse_qs(self.popularity_threshold[offset:])
+        minimums = Popularity(**parameters)
+        return PopularityThreshold(minimums, junction)
 
     def max_cache_age(self) -> timedelta:
         try:
@@ -108,20 +149,23 @@ class ShypipOptions(NamedTuple):
 
     @staticmethod
     def create(getenv = os.getenv) -> 'ShypipOptions':
-        return ShypipOptions(
-            untrusted_sources_spec=getenv(ENV_UNTRUSTED, "pypi.org"),
-            popularity_threshold=getenv(ENV_POPULARITY, ""),
-            cache_dir=getenv(ENV_CACHE, _default_cache_dir()),
-            pypistats_api_url=getenv(ENV_PYPISTATS_API_URL, "https://pypistats.org/api"),
-            max_cache_age_minutes=getenv(ENV_MAX_CACHE_AGE, "1440"),
-            dump_config=getenv(ENV_DUMP_CONFIG, ""),
-            log_file=getenv(ENV_LOG_FILE, ""),
-        )
+        d = {}
+        for field in ShypipOptions._fields:
+            env_var_name = ShypipOptions.get_related_env_var_name(field)
+            default_value = ShypipOptions._field_defaults[field]
+            value = getenv(env_var_name, default_value)
+            d[field] = value
+        return ShypipOptions(**d)
+
+    @staticmethod
+    def get_related_env_var_name(field: str) -> str:
+        docstring = ShypipOptions.__dict__[field].__doc__
+        env_var_name = docstring.split()[-1]
+        return env_var_name
 
     def print_config(self, ofile: TextIO = sys.stderr):
         for field in self._fields:
-            docstring = ShypipOptions.__dict__[field].__doc__
-            env_var_name = docstring.split()[-1]
+            env_var_name = ShypipOptions.get_related_env_var_name(field)
             value = getattr(self, field)
             print(f"{env_var_name}={value}", file=ofile)
 
@@ -134,13 +178,7 @@ ShypipOptions.max_cache_age_minutes.__doc__ = f"max age in minutes for trusting 
 ShypipOptions.dump_config.__doc__ = f"flag that specifies program should print config and exit; set by {ENV_DUMP_CONFIG}"
 ShypipOptions.log_file.__doc__ = f"pathname of log file to append to; set by {ENV_LOG_FILE}"
 
-
-class Popularity(NamedTuple):
-
-    last_day: int
-    last_week: int
-    last_month: int
-
+_OPTIONS_DEFAULTS = ShypipOptions()
 
 class PypiStatsResponse(NamedTuple):
 
@@ -217,7 +255,7 @@ class FilePypiStatsCache(PypiStatsCache):
 
     def _popularity_file(self, package_name: str) -> Path:
         # TODO check whether a package_name is always a safe filename stem
-        return self.shypip_options.cache_dir_path() / "popularity" / f"{package_name}.json"
+        return self.shypip_options.cache_dir_path / "popularity" / f"{package_name}.json"
 
     # noinspection PyMethodMayBeStatic
     def _now(self) -> datetime:
@@ -384,13 +422,13 @@ class ShyCandidateEvaluator(CandidateEvaluator, ShyMixin):
             if popularity is None:
                 popularity = self.pypistats_cache.query_popularity(package_name)
             return popularity
-
+        threshold = self._shypip_options.parse_popularity_threshold()
         for candidate in candidates:
             if is_package_repo_candidate(candidate):
                 if self._shypip_options.is_untrusted(candidate):
                     # ignore if it's from an untrusted source whose popularity can't be queried
                     if self.pypistats_cache.is_query_supported(candidate.link.comes_from):
-                        if self._shypip_options.is_popularity_satisfied(package_name, get_popularity()):
+                        if threshold.evaluate(get_popularity()):
                             filtered.append(candidate)
                 else:
                     filtered.append(candidate)

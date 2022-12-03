@@ -156,8 +156,30 @@ class FilePypiStatsCacheTest(TestCase):
 class ShypipOptionsTest(TestCase):
 
     def test_create(self):
-        env = {
+        s = ShypipOptions.create({}.get)
+        self.assertEqual(ShypipOptions(), s)
+        self.assertRegex(s.cache_dir_path.name, r'^shypip-cache-\d{8}$')
 
-        }
-        s = ShypipOptions.create(env.get)
-        self.assertRegex(s.cache_dir_path().name, r'^shypip-cache-\d{8}$')
+    def test_get_related_environment_variable_name(self):
+        from shypip import _ENV_PREFIX
+        s = ShypipOptions()
+        for field in s._fields:
+            actual = ShypipOptions.get_related_env_var_name(field)
+            self.assertRegex(actual, f'^{_ENV_PREFIX}_[_A-Z]+$')
+        with self.assertRaises(KeyError):
+            ShypipOptions.get_related_env_var_name("not_a_field")
+
+
+class PopularityThresholdTest(TestCase):
+    def test_evaluate(self):
+        from shypip import PopularityThreshold
+        last_day_many = PopularityThreshold(Popularity(last_day=1_000_000), all)
+        self.assertTrue(last_day_many.evaluate(Popularity(last_day=1_000_001)))
+        conjunctive = PopularityThreshold(Popularity(100, 200, 300), all)
+        self.assertTrue(conjunctive.evaluate(Popularity(101, 201, 301)))
+        self.assertFalse(conjunctive.evaluate(Popularity(101, 201, 299)))
+        disjunctive = PopularityThreshold(Popularity(100, 200, 300), any)
+        self.assertTrue(disjunctive.evaluate(Popularity(last_week=201)))
+        self.assertFalse(disjunctive.evaluate(Popularity(1, 2, 3)))
+
+
