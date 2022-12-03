@@ -175,23 +175,30 @@ class ModuleVenvCreator(VenvCreator):
 class VirtualEnv(AbstractContextManager):
 
     def __init__(self):
-        self._tempdir = None
+        self.tempdir = None
+        self.venv_dir = None
         self._venv_creator = SubprocessVenvCreator()
 
     def __enter__(self) -> 'VirtualEnv':
-        self._tempdir = TemporaryDirectory(prefix="shypiptest_")
-        self.venv_dir = Path(self._tempdir.name) / "venv"
+        return self.create()
+
+    def create(self) -> 'VirtualEnv':
+        self.tempdir = TemporaryDirectory(prefix="shypiptest_")
+        self.venv_dir = Path(self.tempdir.name) / "venv"
         try:
             self._venv_creator.create(self.venv_dir)
             self.install("pip~=22.3.1")
         except:
-            self._tempdir.cleanup()
+            self.tempdir.cleanup()
             raise
         return self
 
+    def cleanup(self):
+        if self.tempdir is not None:
+            self.tempdir.cleanup()
+
     def __exit__(self, et, ev, tb):
-        if self._tempdir is not None:
-            self._tempdir.cleanup()
+        self.cleanup()
         super().__exit__(et, ev, tb)
 
     def python(self) -> str:

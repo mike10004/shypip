@@ -27,8 +27,16 @@ class MainTest(TestCase):
         "--disable-pip-version-check",
         "--no-color",
         "--no-input",
-        "--no-cache-dir",
     ]
+
+    def setUp(self):
+        self.virtual_env = VirtualEnv().create()
+        self.pip_cache_dir = Path(self.virtual_env.tempdir.name) / "pip-cache"
+        self.pip_cache_dir.mkdir()
+
+    def tearDown(self):
+        if hasattr(self, "virtual_env"):
+            self.virtual_env.cleanup()
 
     # noinspection PyMethodMayBeStatic
     def _env(self, more_env: Dict[str, str] = None) -> Dict[str, str]:
@@ -37,45 +45,45 @@ class MainTest(TestCase):
             env.update(more_env)
         return env
 
-    def _shypip_cmd(self, virtual_env: VirtualEnv, args: List[str]) -> List[str]:
+    def _shypip_cmd(self, args: List[str]) -> List[str]:
         cmd = [
-            virtual_env.python(),
+            self.virtual_env.python(),
             main_file(),
         ]
         cmd += self._common_pip_options
+        cmd += ["--cache-dir", self.pip_cache_dir]
         cmd += args
         return cmd
 
 
     def test_install_rejects_ambiguous_dependency(self):
-        with VirtualEnv() as virtual_env:
-            packages_installed = virtual_env.list_installed_packages()
-            log_file = Path(virtual_env._tempdir.name) / "shypip.log"
-            with LocalRepositoryServer() as server:
-                server.start()
-                repo_url = server.url(host="localhost")
-                cmd =  self._shypip_cmd(virtual_env, [
-                    "install",
-                    "--progress-bar", "off",
-                    "sampleproject",
-                    "--extra-index-url", repo_url,
-                ])
-                env = self._env({
-                    "SHYPIP_POPULARITY": "-1",  # disable popularity check
-                    "SHYPIP_LOG_FILE": str(log_file)
-                })
-                proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
-                passed = False
-                try:
-                    self.assertEqual(1, proc.returncode, f"unexpected exit code from shypip:\n\n{proc.stdout}\n\n{proc.stderr}")
-                    stderr_lines = [line for line in io.StringIO(proc.stderr)]
-                    self.assertIn(MULTIPLE_SOURCES_MESSAGE_PREFIX, proc.stderr, f"output does not contain expected error message text ({repr(MULTIPLE_SOURCES_MESSAGE_PREFIX)}; installed: {packages_installed}:\n\n{proc.stderr}")
-                    self.assertLessEqual(len(stderr_lines), 5, f"expect <= 5 lines of output:\n\n{proc.stderr}")
-                    actual_packages_installed = virtual_env.list_installed_packages()
-                    self.assertSetEqual(set(packages_installed), set(actual_packages_installed))
-                    passed = True
-                finally:
-                    self._print_log(log_file, not passed)
+        packages_installed = self.virtual_env.list_installed_packages()
+        log_file = Path(self.virtual_env.tempdir.name) / "shypip.log"
+        with LocalRepositoryServer() as server:
+            server.start()
+            repo_url = server.url(host="localhost")
+            cmd =  self._shypip_cmd([
+                "install",
+                "--progress-bar", "off",
+                "sampleproject",
+                "--extra-index-url", repo_url,
+            ])
+            env = self._env({
+                "SHYPIP_POPULARITY": "-1",  # disable popularity check
+                "SHYPIP_LOG_FILE": str(log_file)
+            })
+            proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
+            passed = False
+            try:
+                self.assertEqual(1, proc.returncode, f"unexpected exit code from shypip:\n\n{proc.stdout}\n\n{proc.stderr}")
+                stderr_lines = [line for line in io.StringIO(proc.stderr)]
+                self.assertIn(MULTIPLE_SOURCES_MESSAGE_PREFIX, proc.stderr, f"output does not contain expected error message text ({repr(MULTIPLE_SOURCES_MESSAGE_PREFIX)}; installed: {packages_installed}:\n\n{proc.stderr}")
+                self.assertLessEqual(len(stderr_lines), 5, f"expect <= 5 lines of output:\n\n{proc.stderr}")
+                actual_packages_installed = self.virtual_env.list_installed_packages()
+                self.assertSetEqual(set(packages_installed), set(actual_packages_installed))
+                passed = True
+            finally:
+                self._print_log(log_file, not passed)
 
 
     def _print_log(self, shypip_log_file: Path, always: bool = False):
@@ -93,33 +101,32 @@ class MainTest(TestCase):
         self.assertIsNotNone(cache.read_cached_popularity(package_name))
 
     def test_query_popularity(self):
-        with VirtualEnv() as virtual_env:
-            cache_dir = Path(virtual_env._tempdir.name) / "cache"
-            self._prepare_cache_dir(cache_dir, "sampleproject", Popularity(last_day=1, last_week=2, last_month=3))
-            log_file = Path(virtual_env._tempdir.name) / "shypip.log"
-            with LocalRepositoryServer() as server:
-                server.start()
-                repo_url = server.url(host="localhost")
-                cmd = self._shypip_cmd(virtual_env, [
-                    "install",
-                    "--progress-bar", "off",
-                    "sampleproject>=1.9.0",
-                    "--extra-index-url", repo_url,
-                    "--trusted-host", f"localhost:{server.http_server.server_port}",
-                ])
-                env = self._env({
-                    ENV_CACHE: str(cache_dir),
-                    ENV_LOG_FILE: str(log_file),
-                    ENV_POPULARITY: str(100),
-                })
-                proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
-                passed = False
-                try:
-                    self.assertEqual(0, proc.returncode, f"subprocess fail: {proc.stderr}")
-                    installed = virtual_env.list_installed_packages()
-                    self.assertIn(("sampleproject", "1.9.0"), installed)
-                    log_file_text = log_file.read_text()
-                    self.assertIn("cache hit: sampleproject", log_file_text)
-                    passed = True
-                finally:
-                    self._print_log(log_file, not passed)
+        cache_dir = Path(self.virtual_env.tempdir.name) / "cache"
+        self._prepare_cache_dir(cache_dir, "sampleproject", Popularity(last_day=1, last_week=2, last_month=3))
+        log_file = Path(self.virtual_env.tempdir.name) / "shypip.log"
+        with LocalRepositoryServer() as server:
+            server.start()
+            repo_url = server.url(host="localhost")
+            cmd = self._shypip_cmd([
+                "install",
+                "--progress-bar", "off",
+                "sampleproject>=1.9.0",
+                "--extra-index-url", repo_url,
+                "--trusted-host", f"localhost:{server.http_server.server_port}",
+            ])
+            env = self._env({
+                ENV_CACHE: str(cache_dir),
+                ENV_LOG_FILE: str(log_file),
+                ENV_POPULARITY: str(100),
+            })
+            proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
+            passed = False
+            try:
+                self.assertEqual(0, proc.returncode, f"subprocess fail: {proc.stderr}")
+                installed = self.virtual_env.list_installed_packages()
+                self.assertIn(("sampleproject", "1.9.0"), installed)
+                log_file_text = log_file.read_text()
+                self.assertIn("cache hit: sampleproject", log_file_text)
+                passed = True
+            finally:
+                self._print_log(log_file, not passed)
