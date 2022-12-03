@@ -21,9 +21,19 @@ from shypip.tests import VirtualEnv
 from shypip import ShypipOptions
 from shypip import FilePypiStatsCache
 from shypip import ShyDownloadCommand
+from shypip import MULTIPLE_SOURCES_MESSAGE_PREFIX
 
 
 class MainTest(TestCase):
+
+    VERBOSE_LOG = False
+    _common_pip_options = [
+        "--require-virtualenv",
+        "--disable-pip-version-check",
+        "--no-color",
+        "--no-input",
+        "--no-cache-dir",
+    ]
 
     def test_download_find_candidates(self):
         from pip._internal.cli.main_parser import parse_command
@@ -48,8 +58,8 @@ class MainTest(TestCase):
                 stderr_buffer = io.StringIO()
                 with contextlib.redirect_stderr(stderr_buffer):
                     exit_code = command.main(cmd_args)
-                    self.assertEqual(2, exit_code)
-                self.assertIn("MultipleRepositoryCandidatesException", stderr_buffer.getvalue())
+                self.assertEqual(1, exit_code, f"expected exit code:\n\n{stderr_buffer.getvalue()}")
+                self.assertIn(MULTIPLE_SOURCES_MESSAGE_PREFIX, stderr_buffer.getvalue())
 
     # noinspection PyMethodMayBeStatic
     def _env(self, more_env: Dict[str, str] = None) -> Dict[str, str]:
@@ -58,6 +68,16 @@ class MainTest(TestCase):
             env.update(more_env)
         return env
 
+    def _shypip_cmd(self, virtual_env: VirtualEnv, args: List[str]) -> List[str]:
+        cmd = [
+            virtual_env.python(),
+            main_file(),
+        ]
+        cmd += self._common_pip_options
+        cmd += args
+        return cmd
+
+
     def test_install_rejects_ambiguous_dependency(self):
         with VirtualEnv() as virtual_env:
             packages_installed = virtual_env.list_installed_packages()
@@ -65,34 +85,24 @@ class MainTest(TestCase):
             with LocalRepositoryServer() as server:
                 server.start()
                 repo_url = server.url(host="localhost")
-                cmd = [
-                    virtual_env.python(),
-                    main_file(),
-                ] + self._common_pip_options() + [
+                cmd =  self._shypip_cmd(virtual_env, [
                     "install",
                     "--progress-bar", "off",
                     "sampleproject",
                     "--extra-index-url", repo_url,
-                    "--trusted-host", f"localhost:{server.http_server.server_port}",
-                ]
+                ])
                 env = self._env({"SHYPIP_LOG_FILE": str(shypip_log_file)})
                 proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
                 if shypip_log_file.is_file():
-                    print(Path(shypip_log_file).read_text())
+                    if self.VERBOSE_LOG:
+                        print(Path(shypip_log_file).read_text())
                 else:
                     print("no log file created")
-                self.assertEqual(2, proc.returncode, f"Output from shypip:\n\n{proc.stdout}\n\n{proc.stderr}")
-                self.assertIn("MultipleRepositoryCandidatesException", proc.stderr, f"output does not indicate MultipleRepositoryCandidatesException was raised; installed: {packages_installed}")
+                self.assertEqual(1, proc.returncode, f"unexpected exit code from shypip:\n\n{proc.stdout}\n\n{proc.stderr}")
+                stderr_lines = [line for line in io.StringIO(proc.stderr)]
+                self.assertIn(MULTIPLE_SOURCES_MESSAGE_PREFIX, proc.stderr, f"output does not contain expected error message text ({repr(MULTIPLE_SOURCES_MESSAGE_PREFIX)}; installed: {packages_installed}:\n\n{proc.stderr}")
+                self.assertLessEqual(len(stderr_lines), 5, f"expect <= 5 lines of output:\n\n{proc.stderr}")
 
-    @staticmethod
-    def _common_pip_options() -> List[str]:
-        return [
-            "--require-virtualenv",
-            "--disable-pip-version-check",
-            "--no-color",
-            "--no-input",
-            "--no-cache-dir",
-        ]
 
     def _prepare_cache_dir(self, cache_dir: Path, package_name: str, popularity: Popularity):
         cache = FilePypiStatsCache(ShypipOptions(
@@ -109,16 +119,13 @@ class MainTest(TestCase):
             with LocalRepositoryServer() as server:
                 server.start()
                 repo_url = server.url(host="localhost")
-                cmd = [
-                    virtual_env.python(),
-                    main_file(),
-                ] + self._common_pip_options() + [
+                cmd = self._shypip_cmd(virtual_env, [
                     "install",
                     "--progress-bar", "off",
                     "sampleproject>=1.9.0",
                     "--extra-index-url", repo_url,
                     "--trusted-host", f"localhost:{server.http_server.server_port}",
-                ]
+                ])
                 env = self._env({
                     ENV_CACHE: str(cache_dir),
                     ENV_LOG_FILE: str(log_file),

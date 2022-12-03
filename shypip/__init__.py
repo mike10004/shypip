@@ -15,6 +15,8 @@ from collections import defaultdict
 from optparse import Values
 
 # noinspection PyProtectedMember
+from pip._internal.exceptions import InstallationError
+# noinspection PyProtectedMember
 from pip._internal.utils.hashes import Hashes
 # noinspection PyProtectedMember
 from pip._vendor.packaging import specifiers
@@ -49,6 +51,7 @@ ENV_LOG_FILE = f"{_ENV_PREFIX}LOG_FILE"
 ENV_PYPISTATS_API_URL = f"{_ENV_PREFIX}PYPISTATS_API_URL"
 ENV_MAX_CACHE_AGE = f"{_ENV_PREFIX}MAX_CACHE_AGE"
 ENV_DUMP_CONFIG = f"{_ENV_PREFIX}DUMP_CONFIG"
+MULTIPLE_SOURCES_MESSAGE_PREFIX="multiple possible repository sources for "
 Pathish = Union[str, Path]
 DEFAULT_MAX_CACHE_AGE = timedelta(hours=24)
 
@@ -244,7 +247,7 @@ class FilePypiStatsCache(PypiStatsCache):
         return None
 
 
-class DependencySecurityException(Exception):
+class DependencySecurityException(InstallationError):
     pass
 
 
@@ -354,9 +357,8 @@ class CandidateOriginAnalysis(NamedTuple):
             raise ValueError(f"multiple package names: {package_names}")
         return package_names.pop()
 
-    def assert_unambiguous(self):
-        if self.is_ambiguous():
-            raise MultipleRepositoryCandidatesException(f"multiple possible repository sources for {self.package_name()}: {self.summarize()}")
+    def create_multiple_sources_error_message(self):
+        return f"{_PROG}: {MULTIPLE_SOURCES_MESSAGE_PREFIX}{self.package_name()}: {self.summarize()}"
 
 
 class ShyCandidateEvaluator(CandidateEvaluator, ShyMixin):
@@ -364,6 +366,10 @@ class ShyCandidateEvaluator(CandidateEvaluator, ShyMixin):
     @cached_property
     def pypistats_cache(self) -> PypiStatsCache:
         return self._shypip_options.create_pypistats_cache()
+
+    # noinspection PyMethodMayBeStatic
+    def _error_sink(self) -> TextIO:
+        return sys.stderr
 
     def _refilter_candidates(self, candidates: List[InstallationCandidate]) -> List[InstallationCandidate]:
         if not candidates:
@@ -408,9 +414,9 @@ class ShyCandidateEvaluator(CandidateEvaluator, ShyMixin):
                     best_candidate = self.sort_best_candidate(applicable_candidates)
                     self._shypip_options.log("best candidate after filtering:", best_candidate)
                 else:
-                    self._shypip_options.log("aborting due to resolution ambiguity")
-                    analysis.assert_unambiguous()
-                    raise NotImplementedError("BUG: unreachable")
+                    self._shypip_options.log("returning result with no applicable candidates due to resolution ambiguity")
+                    error_msg = analysis.create_multiple_sources_error_message()
+                    raise MultipleRepositoryCandidatesException(error_msg)
                 return BestCandidateResult(
                     candidates,
                     applicable_candidates=applicable_candidates,
