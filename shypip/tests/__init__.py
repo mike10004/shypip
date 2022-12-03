@@ -3,6 +3,7 @@
 """Common testing utilities."""
 
 import io
+import os
 import socket
 import platform
 import threading
@@ -18,6 +19,7 @@ from contextlib import AbstractContextManager
 from functools import partial
 from typing import Optional, List, Tuple
 from shypip import Pathish
+import contextlib
 import logging
 
 
@@ -213,5 +215,3 @@ def maybe_read_text(pathname: Pathish) -> str:
         return Path(pathname).read_text("utf-8")
     except FileNotFoundError:
         return ""
-
-

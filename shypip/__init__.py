@@ -111,7 +111,6 @@ class ShypipOptions(NamedTuple):
             parsed_origin = urllib.parse.urlparse(candidate.link.comes_from)
             return parsed_origin.netloc in self.untrusted_sources()
 
-    @cached_property
     def cache_dir_path(self) -> Path:
         return Path(self.cache_dir or _default_cache_dir())
 
@@ -190,11 +189,12 @@ class PypiStatsResponse(NamedTuple):
         return Popularity(**self.data)
 
 
-def _default_cache_dir(now: datetime = None) -> Path:
+def _default_cache_dir(now: datetime = None, no_try_home: bool = False) -> Path:
     if platform.system() != "Windows":
-        home_cache_dir = Path("~").expanduser() / ".cache" / "shypip"
-        if home_cache_dir.is_dir():
-            return home_cache_dir
+        if not no_try_home:
+            home_cache_dir = Path("~").expanduser() / ".cache" / "shypip"
+            if home_cache_dir.is_dir():
+                return home_cache_dir
     now = now or datetime.now()
     timestamp = now.strftime("%Y%m%d")
     return Path(tempfile.gettempdir()) / f"shypip-cache-{timestamp}"
@@ -255,7 +255,7 @@ class FilePypiStatsCache(PypiStatsCache):
 
     def _popularity_file(self, package_name: str) -> Path:
         # TODO check whether a package_name is always a safe filename stem
-        return self.shypip_options.cache_dir_path / "popularity" / f"{package_name}.json"
+        return self.shypip_options.cache_dir_path() / "popularity" / f"{package_name}.json"
 
     # noinspection PyMethodMayBeStatic
     def _now(self) -> datetime:
