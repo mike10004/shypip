@@ -447,8 +447,11 @@ class ShyCandidateEvaluator(CandidateEvaluator, ShyMixin):
                     if not trusted_only:
                         # ignore if it's from an untrusted source whose popularity can't be queried
                         if self.pypistats_cache.is_query_supported(candidate.link.comes_from):
-                            if threshold.evaluate(get_popularity()):
+                            popularity_ = get_popularity()
+                            if threshold.evaluate(popularity_):
                                 filtered.append(candidate)
+                            else:
+                                self._shypip_options.log("excluded", candidate.name, candidate.version, "from", candidate.link.comes_from,"because",popularity_,"does not satisfy threshold", threshold)
                 else:
                     filtered.append(candidate)
             else:

@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 
 """Common testing utilities."""
-
+import hashlib
 import io
+import os
+import shutil
 import socket
 import platform
 import threading
@@ -16,7 +18,7 @@ from http.server import ThreadingHTTPServer
 from http.server import _get_best_family
 from contextlib import AbstractContextManager
 from functools import partial
-from typing import Optional, List, Tuple, Any
+from typing import Optional, List, Tuple, Any, NamedTuple
 from shypip import Pathish
 import logging
 
@@ -233,3 +235,54 @@ def maybe_read_text(pathname: Pathish) -> str:
         return Path(pathname).read_text("utf-8")
     except FileNotFoundError:
         return ""
+
+
+class Package(NamedTuple):
+
+    name: str
+    version: str
+    file: Path
+    sha256sum: str
+
+    def publish(self, repo_root: Path):
+        directory = repo_root / self.name
+        directory.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(self.file, directory / self.file.name)
+
+    @staticmethod
+    def create(name: str, version: str, file: Path) -> 'Package':
+        h = hashlib.sha256()
+        h.update(file.read_bytes())
+        sha256sum = h.hexdigest()
+        return Package(name, version, file, sha256sum)
+
+
+
+def get_package(version: str, name: str = "sampleproject") -> Package:
+    packages_dir = Path(__file__).absolute().parent.resolve() / "packages"
+    filename = f"{name}-{version}-py3-none-any.whl"
+    package_file = packages_dir / filename
+    return Package.create(name, version, package_file)
+
+
+
+
+
+class PipCache(NamedTuple):
+
+    directory: Path
+
+    def find_packages(self, name: str, allow_empty: bool = False) -> List[Package]:
+        packages = []
+        files = []
+        for root, subdirs, filenames in os.walk(self.directory):
+            for filename in filenames:
+                file = Path(root) / filename
+                files.append(file)
+                name_prefix = f"{name}-"
+                if filename.startswith(name_prefix):
+                    version = filename[len(name_prefix):].split("-", maxsplit=1)[0]
+                    packages.append(Package.create(name, version, file))
+        if not allow_empty and not packages:
+            raise ValueError(f"file with name {name} not found among {files}")
+        return packages
