@@ -71,6 +71,17 @@ class PopularityThreshold(NamedTuple):
     minimums: Popularity
     junction: Junction
 
+    def __str__(self) -> str:
+        junction_name = self.junction_name()
+        return f"{junction_name}({self.minimums.last_day}/{self.minimums.last_week}/{self.minimums.last_month})"
+
+    def junction_name(self) -> str:
+        if self.junction is all:
+            return "and"
+        if self.junction is any:
+            return "or"
+        return str(self.junction)
+
     def evaluate_field(self, field: str, popularity: Popularity) -> bool:
         if self.minimums.__getattribute__(field) < 0:
             return False
@@ -118,10 +129,16 @@ class ShypipOptions(NamedTuple):
     prompt_answer: str = ""
     log_file: str = ""
 
-    def log(self, *messages):
+    def log(self, *messages, **kwargs):
+        mode = "a"
+        try:
+            if bool(kwargs.get('truncate', False)):
+                mode = "w"
+        except (TypeError, ValueError):
+            pass
         if self.log_file:
             try:
-                with open(self.log_file, "a") as ofile:
+                with open(self.log_file, mode) as ofile:
                     print(*messages, file=ofile)
             except IOError as e:
                 print("shypip: log error", type(e), e, file=sys.stderr)
@@ -345,12 +362,11 @@ class ResolvedPackage(NamedTuple):
 
     name: str
     version: str
-    comes_from: str
-    url: str
+    origin: str
 
     @staticmethod
     def from_candidate(candidate: InstallationCandidate) -> 'ResolvedPackage':
-        return ResolvedPackage(candidate.name, str(candidate.version), candidate.link.comes_from, candidate.link.url)
+        return ResolvedPackage(candidate.name, str(candidate.version), candidate.link.netloc)
 
 
 class CandidateOriginAnalysis(NamedTuple):
@@ -459,13 +475,12 @@ class ShyCandidateEvaluator(CandidateEvaluator, ShyMixin):
                             popularity_ = get_popularity()
                             if threshold.evaluate(popularity_):
                                 filtered.append(candidate)
-                            else:
-                                self._shypip_options.log("excluded", candidate.name, candidate.version, "from", candidate.link.comes_from,"because",popularity_,"does not satisfy threshold", threshold)
                 else:
                     filtered.append(candidate)
             else:
                 filtered.append(candidate)
-        self._shypip_options.log(len(candidates), "candidates popularity-filtered by threshold", self._shypip_options.popularity_threshold, "to", len(filtered))
+        reanalysis = CandidateOriginAnalysis.analyze(filtered)
+        self._shypip_options.log(len(candidates), "candidates popularity-filtered by threshold", threshold, "to", reanalysis.summarize())
         return filtered
 
     def compute_best_candidate(self, candidates: List[InstallationCandidate]) -> BestCandidateResult:
@@ -548,7 +563,7 @@ class ShyInstallCommand(InstallCommand, ShyMixin):
         return package_finder
 
     def run(self, options: Values, args: List[str]) -> int:
-        self._shypip_options.log("command:", *sys.argv)
+        self._shypip_options.log("command:", *sys.argv, truncate=True)
         return super().run(options, args)
 
 
@@ -565,7 +580,7 @@ class ShyDownloadCommand(DownloadCommand, ShyMixin):
         return self._build_shy_package_finder(options, session, target_python, ignore_requires_python)
 
     def run(self, options: Values, args: List[str]) -> int:
-        self._shypip_options.log("command:", *sys.argv)
+        self._shypip_options.log("command:", *sys.argv, truncate=True)
         return super().run(options, args)
 
 
