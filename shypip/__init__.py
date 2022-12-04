@@ -406,7 +406,7 @@ class CandidateOriginAnalysis(NamedTuple):
         return f"{_PROG}: {MULTIPLE_SOURCES_MESSAGE_PREFIX}{self.package_name()}: {self.summarize()}"
 
 
-def prompt_for_explicit_allow(candidate: InstallationCandidate, canned_answer: str, instream: TextIO = sys.stdin) -> bool:
+def prompt_for_explicit_allow(candidate: InstallationCandidate, canned_answer: str) -> bool:
     if canned_answer:
         answer = canned_answer
     else:
@@ -483,7 +483,7 @@ class ShyCandidateEvaluator(CandidateEvaluator, ShyMixin):
                             if explicit_allow:
                                 self._shypip_options.log("user explicitly allowed", best_candidate)
                             else:
-                                applicable_candidates = self._refilter_candidates(applicable_candidates)
+                                applicable_candidates = self._refilter_candidates(applicable_candidates, trusted_only=True)
                                 best_candidate = self.sort_best_candidate(applicable_candidates)
                 else:
                     self._shypip_options.log("resolution ambiguous and popularity check disabled")

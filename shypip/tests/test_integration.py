@@ -48,8 +48,12 @@ class TestResult(NamedTuple):
     def assert_exit_code(self, test_case: TestCase, expected: int):
         test_case.assertEqual(expected, self.proc.returncode, f"unexpected exit code from shypip:\n\n{self.proc.stdout}\n\n{self.proc.stderr}")
 
+    def assert_nothing_installed(self, test_case: TestCase):
+        test_case.assertSetEqual(set(self.packages_installed_before), set(self.packages_installed_after))
+
 
 _KNOWN_PUBLIC_131_SHA256SUM = "75bb5bb4e74a1b77dc0cff25ebbacb54fe1318aaf99a86a036cefc86ed885ced"
+_KNOWN_PRIVATE_130_SHA256SUM = "75bb5bb4e74a1b77dc0cff25ebbacb54fe1318aaf99a86a036cefc86ed885ced"
 
 
 class MainTest(TestCase):
@@ -118,6 +122,27 @@ class MainTest(TestCase):
             download_info = result.install_report.get_download_info("sampleproject")
             self.assertEqual("files.pythonhosted.org", urllib.parse.urlparse(download_info.get('url')).netloc)
             self.assertEqual(f"sha256={_KNOWN_PUBLIC_131_SHA256SUM}", download_info['archive_info']['hash'], "sha256sum of downloaded package")
+            passed = True
+        finally:
+            self._print_log(not passed)
+
+    def test_install_publichigher_popular_promptno(self):
+        setup = TestSetup(
+            private_repo_packages=(get_package("1.3.0"),),
+            public_package_popularities=(PackagePopularity("sampleproject", Popularity(100, 200, 300)),),
+            dependency_declaration="sampleproject~=1.3.0",
+            popularity_threshold="50",
+            prompt_answer="no",
+        )
+        passed = False
+        result = self._run_shypip(setup)
+        try:
+            result.assert_exit_code(self, 0)
+            self.assertIn(("sampleproject", "1.3.0"), result.packages_installed_after)
+            download_info = result.install_report.get_download_info("sampleproject")
+            self.assertEqual("localhost", urllib.parse.urlparse(download_info.get('url')).netloc.split(':', maxsplit=1)[0])
+            expected_hash = setup.private_repo_packages[0].sha256sum
+            self.assertEqual(f"sha256={expected_hash}", download_info['archive_info']['hash'], "sha256sum of downloaded package")
             passed = True
         finally:
             self._print_log(not passed)
