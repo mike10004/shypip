@@ -1,6 +1,6 @@
 [project]
 name = "shypip"
-version = "0.3.1"
+version = "0.3.2"
 description = "more secure pip for hybrid public-private repository configurations"
 readme = "README.md"
 requires-python = ">=3.8, <4"
