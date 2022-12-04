@@ -1,0 +1,37 @@
+[project]
+name = "shypip"
+version = "0.3.1"
+description = "more secure pip for hybrid public-private repository configurations"
+readme = "README.md"
+requires-python = ">=3.8, <4"
+license = {file = "LICENSE.txt"}
+keywords = ["development"]
+authors = [
+  {name = "Mike Chaberski", email = "mac937@nyu.edu" }
+]
+classifiers = [  # Optional
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Topic :: Software Development :: Build Tools",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3 :: Only",
+]
+dependencies = [
+  "pip~=22.3.1"
+]
+
+[project.urls]  # Optional
+"Homepage" = "https://github.com/mike10004/shypip"
+"Bug Reports" = "https://github.com/mike10004/shypip/issues"
+"Source" = "https://github.com/mike10004/shypip/"
+
+[project.scripts]  # Optional
+shypip = "shypip:main"
+
+[build-system]
+# These are the assumed default build requirements from pip:
+# https://pip.pypa.io/en/stable/reference/pip/#pep-517-and-518-support
+requires = ["setuptools>=43.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
