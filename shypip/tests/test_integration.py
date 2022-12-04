@@ -3,7 +3,7 @@
 import io
 import os
 import subprocess
-import tempfile
+import urllib.parse
 from pathlib import Path
 from typing import List, Dict, NamedTuple, Tuple
 from unittest import TestCase
@@ -21,7 +21,7 @@ from shypip.tests import VirtualEnv
 from shypip.tests import main_file
 from shypip.tests import Package
 from shypip.tests import get_package
-from shypip.tests import PipCache
+from shypip.tests import InstallReport
 
 
 class PackagePopularity(NamedTuple):
@@ -43,6 +43,7 @@ class TestResult(NamedTuple):
     proc: subprocess.CompletedProcess
     packages_installed_before: Tuple[Tuple[str, str], ...]
     packages_installed_after: Tuple[Tuple[str, str], ...]
+    install_report: InstallReport
 
     def assert_exit_code(self, test_case: TestCase, expected: int):
         test_case.assertEqual(expected, self.proc.returncode, f"unexpected exit code from shypip:\n\n{self.proc.stdout}\n\n{self.proc.stderr}")
@@ -57,16 +58,15 @@ class MainTest(TestCase):
     _common_pip_options = [
         "--require-virtualenv",
         "--disable-pip-version-check",
+        "--no-cache-dir",
         "--no-color",
     ]
 
     def setUp(self):
         self.virtual_env = VirtualEnv().create()
         tempdir = Path(self.virtual_env.tempdir.name)
-        self.pip_cache_dir = tempdir / "pip-cache"
-        self.pip_cache_dir.mkdir()
-        self.pip_cache = PipCache(self.pip_cache_dir)
         self.log_file = tempdir / "shypip.log"
+        self.report_file = tempdir / "report.json"
         self.stats_cache_dir = tempdir / "stats-cache"
 
     def tearDown(self):
@@ -87,14 +87,19 @@ class MainTest(TestCase):
             env.update(more_env)
         return env
 
-    def _shypip_cmd(self, args: List[str]) -> List[str]:
+    def _shypip_cmd(self, setup: TestSetup, server: LocalRepositoryServer) -> List[str]:
         cmd = [
             self.virtual_env.python(),
-            main_file(),
+            str(main_file()),
         ]
         cmd += self._common_pip_options
-        cmd += ["--cache-dir", self.pip_cache_dir]
-        cmd += args
+        cmd += [
+            "install",
+            "--progress-bar", "off",
+            "--extra-index-url", server.url(host="localhost"),
+            "--report", str(self.report_file),
+            setup.dependency_declaration,
+        ]
         return cmd
 
     def test_install_publichigher_popular_promptyes(self):
@@ -110,10 +115,9 @@ class MainTest(TestCase):
         try:
             result.assert_exit_code(self, 0)
             self.assertIn(("sampleproject", "1.3.1"), result.packages_installed_after)
-            cached_packages = self.pip_cache.find_packages("sampleproject")
-            self.assertEqual(1, len(cached_packages))
-            downloaded = cached_packages.pop()
-            self.assertEqual(_KNOWN_PUBLIC_131_SHA256SUM, downloaded.sha256sum, "sha256sum of downloaded package")
+            download_info = result.install_report.get_download_info("sampleproject")
+            self.assertEqual("files.pythonhosted.org", urllib.parse.urlparse(download_info.get('url')).netloc)
+            self.assertEqual(f"sha256={_KNOWN_PUBLIC_131_SHA256SUM}", download_info['archive_info']['hash'], "sha256sum of downloaded package")
             passed = True
         finally:
             self._print_log(not passed)
@@ -141,12 +145,7 @@ class MainTest(TestCase):
             self._prepare_cache_dir(package_name, popularity)
         with LocalRepositoryServer(repo_root=repo_dir) as server:
             server.start()
-            cmd =  self._shypip_cmd([
-                "install",
-                "--progress-bar", "off",
-                setup.dependency_declaration,
-                "--extra-index-url", server.url(host="localhost"),
-            ])
+            cmd =  self._shypip_cmd(setup, server)
             print("executing:", cmd)
             env = self._env({
                 ENV_POPULARITY: setup.popularity_threshold,  # disable popularity check
@@ -158,6 +157,7 @@ class MainTest(TestCase):
                 proc=proc,
                 packages_installed_before=tuple(packages_installed),
                 packages_installed_after=tuple(actual_packages_installed),
+                install_report=InstallReport(self.report_file.read_text('utf-8')),
             )
 
 

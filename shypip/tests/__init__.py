@@ -3,7 +3,7 @@
 """Common testing utilities."""
 import hashlib
 import io
-import os
+import json
 import shutil
 import socket
 import platform
@@ -18,7 +18,7 @@ from http.server import ThreadingHTTPServer
 from http.server import _get_best_family
 from contextlib import AbstractContextManager
 from functools import partial
-from typing import Optional, List, Tuple, Any, NamedTuple
+from typing import Optional, List, Tuple, Any, NamedTuple, Dict
 from shypip import Pathish
 import logging
 
@@ -265,24 +265,12 @@ def get_package(version: str, name: str = "sampleproject") -> Package:
     return Package.create(name, version, package_file)
 
 
+class InstallReport(NamedTuple):
 
+    text: str
 
-
-class PipCache(NamedTuple):
-
-    directory: Path
-
-    def find_packages(self, name: str, allow_empty: bool = False) -> List[Package]:
-        packages = []
-        files = []
-        for root, subdirs, filenames in os.walk(self.directory):
-            for filename in filenames:
-                file = Path(root) / filename
-                files.append(file)
-                name_prefix = f"{name}-"
-                if filename.startswith(name_prefix):
-                    version = filename[len(name_prefix):].split("-", maxsplit=1)[0]
-                    packages.append(Package.create(name, version, file))
-        if not allow_empty and not packages:
-            raise ValueError(f"file with name {name} not found among {files}")
-        return packages
+    def get_download_info(self, package_name: str) -> Optional[Dict[str, Any]]:
+        report = json.loads(self.text)
+        for item in report.get('install', []):
+            if item.get('metadata', {}).get('name', None) == package_name:
+                return item.get('download_info', {})
