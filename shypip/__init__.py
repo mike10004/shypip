@@ -534,6 +534,10 @@ class ShyInstallCommand(InstallCommand, ShyMixin):
         package_finder: ShyPackageFinder = self._build_shy_package_finder(options, session, target_python, ignore_requires_python)
         return package_finder
 
+    def run(self, options: Values, args: List[str]) -> int:
+        self._shypip_options.log("command:", *sys.argv)
+        return super().run(options, args)
+
 
 class ShyDownloadCommand(DownloadCommand, ShyMixin):
 
@@ -546,6 +550,10 @@ class ShyDownloadCommand(DownloadCommand, ShyMixin):
                               target_python: Optional[TargetPython] = None,
                               ignore_requires_python: Optional[bool] = None) -> PackageFinder:
         return self._build_shy_package_finder(options, session, target_python, ignore_requires_python)
+
+    def run(self, options: Values, args: List[str]) -> int:
+        self._shypip_options.log("command:", *sys.argv)
+        return super().run(options, args)
 
 
 

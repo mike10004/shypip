@@ -37,6 +37,11 @@ class TestSetup(NamedTuple):
     popularity_threshold: str
     prompt_answer: str
 
+    def only_private_package(self) -> Package:
+        if len(self.private_repo_packages) != 1:
+            raise ValueError(f"{len(self.private_repo_packages)} private packages; exactly one required")
+        return self.private_repo_packages[0]
+
 
 class TestResult(NamedTuple):
 
@@ -138,14 +143,14 @@ class MainTest(TestCase):
         self._assert_private_package_installed(setup, result)
 
     def _assert_private_package_installed(self, setup: TestSetup, result: TestResult):
+        private_package = setup.only_private_package()
         passed = False
         try:
             result.assert_exit_code(self, 0)
-            self.assertIn(("sampleproject", "1.3.0"), result.packages_installed_after)
+            self.assertIn((private_package.name, private_package.version), result.packages_installed_after)
             download_info = result.install_report.get_download_info("sampleproject")
             self.assertEqual("localhost", urllib.parse.urlparse(download_info.get('url')).netloc.split(':', maxsplit=1)[0])
-            expected_hash = setup.private_repo_packages[0].sha256sum
-            self.assertEqual(f"sha256={expected_hash}", download_info['archive_info']['hash'], "sha256sum of downloaded package")
+            self.assertEqual(f"sha256={private_package.sha256sum}", download_info['archive_info']['hash'], "sha256sum of downloaded package")
             passed = True
         finally:
             self._print_log(not passed)
@@ -161,18 +166,16 @@ class MainTest(TestCase):
         result = self._run_shypip(setup)
         self._assert_private_package_installed(setup, result)
 
-    def test_othercase(self):
-        passed = False
-        try:
-            # stderr_lines = [line for line in io.StringIO(proc.stderr)]
-            # self.assertIn(MULTIPLE_SOURCES_MESSAGE_PREFIX, proc.stderr,
-            #               f"output does not contain expected error message text ({repr(MULTIPLE_SOURCES_MESSAGE_PREFIX)}; installed: {packages_installed}:\n\n{proc.stderr}")
-            # self.assertLessEqual(len(stderr_lines), 5, f"expect <= 5 lines of output:\n\n{proc.stderr}")
-            #
-            # self.assertSetEqual(set(packages_installed), set(actual_packages_installed))
-            passed = True
-        finally:
-            self._print_log(not passed)
+    def test_install_privatehigher(self):
+        setup = TestSetup(
+            private_repo_packages=(get_package("1.3.2"),),
+            public_package_popularities=(PackagePopularity("sampleproject", Popularity(100, 200, 300)),),
+            dependency_declaration="sampleproject~=1.3.0",
+            popularity_threshold="100",
+            prompt_answer="no",
+        )
+        result = self._run_shypip(setup)
+        self._assert_private_package_installed(setup, result)
 
     def _run_shypip(self, setup: TestSetup) -> TestResult:
         packages_installed = self.virtual_env.list_installed_packages()
@@ -185,7 +188,6 @@ class MainTest(TestCase):
         with LocalRepositoryServer(repo_root=repo_dir) as server:
             server.start()
             cmd =  self._shypip_cmd(setup, server)
-            print("executing:", cmd)
             env = self._env({
                 ENV_POPULARITY: setup.popularity_threshold,  # disable popularity check
                 ENV_PROMPT: setup.prompt_answer,
@@ -198,7 +200,6 @@ class MainTest(TestCase):
                 packages_installed_after=tuple(actual_packages_installed),
                 install_report=InstallReport(self.report_file.read_text('utf-8')),
             )
-
 
     def _print_log(self, always: bool = False):
         if always or self.VERBOSE_LOG:
@@ -214,28 +215,3 @@ class MainTest(TestCase):
         cache.write_popularity(package_name, popularity)
         self.assertIsNotNone(cache.read_cached_popularity(package_name))
 
-    def test_query_popularity(self):
-        self._prepare_cache_dir("sampleproject", Popularity(last_day=1, last_week=2, last_month=3))
-        with LocalRepositoryServer() as server:
-            server.start()
-            repo_url = server.url(host="localhost")
-            cmd = self._shypip_cmd([
-                "install",
-                "--progress-bar", "off",
-                "sampleproject>=1.9.0",
-                "--extra-index-url", repo_url,
-            ])
-            env = self._env({
-                ENV_POPULARITY: str(100),
-            })
-            proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
-            passed = False
-            try:
-                self.assertEqual(0, proc.returncode, f"subprocess fail: {proc.stderr}")
-                installed = self.virtual_env.list_installed_packages()
-                self.assertIn(("sampleproject", "1.9.0"), installed)
-                log_file_text = self.log_file.read_text()
-                self.assertIn("cache hit: sampleproject", log_file_text)
-                passed = True
-            finally:
-                self._print_log(not passed)
