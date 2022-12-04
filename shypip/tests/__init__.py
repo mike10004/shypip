@@ -270,6 +270,8 @@ class InstallReport(NamedTuple):
     text: str
 
     def get_download_info(self, package_name: str) -> Optional[Dict[str, Any]]:
+        if not self.text:
+            return None
         report = json.loads(self.text)
         for item in report.get('install', []):
             if item.get('metadata', {}).get('name', None) == package_name:

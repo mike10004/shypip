@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-import io
 import os
 import subprocess
 import urllib.parse
@@ -22,6 +21,9 @@ from shypip.tests import main_file
 from shypip.tests import Package
 from shypip.tests import get_package
 from shypip.tests import InstallReport
+from shypip.tests import maybe_read_text
+
+_KNOWN_PUBLIC_131_SHA256SUM = "75bb5bb4e74a1b77dc0cff25ebbacb54fe1318aaf99a86a036cefc86ed885ced"
 
 
 class PackagePopularity(NamedTuple):
@@ -55,10 +57,6 @@ class TestResult(NamedTuple):
 
     def assert_nothing_installed(self, test_case: TestCase):
         test_case.assertSetEqual(set(self.packages_installed_before), set(self.packages_installed_after))
-
-
-_KNOWN_PUBLIC_131_SHA256SUM = "75bb5bb4e74a1b77dc0cff25ebbacb54fe1318aaf99a86a036cefc86ed885ced"
-_KNOWN_PRIVATE_130_SHA256SUM = "75bb5bb4e74a1b77dc0cff25ebbacb54fe1318aaf99a86a036cefc86ed885ced"
 
 
 class MainTest(TestCase):
@@ -96,7 +94,7 @@ class MainTest(TestCase):
             env.update(more_env)
         return env
 
-    def _shypip_cmd(self, setup: TestSetup, server: LocalRepositoryServer) -> List[str]:
+    def _shypip_cmd(self, setup: TestSetup, server: LocalRepositoryServer, more_install_args: List[str] = None) -> List[str]:
         cmd = [
             self.virtual_env.python(),
             str(main_file()),
@@ -109,6 +107,8 @@ class MainTest(TestCase):
             "--report", str(self.report_file),
             setup.dependency_declaration,
         ]
+        if more_install_args:
+            cmd += more_install_args
         return cmd
 
     def test_install_publichigher_popular_promptyes(self):
@@ -127,6 +127,25 @@ class MainTest(TestCase):
             download_info = result.install_report.get_download_info("sampleproject")
             self.assertEqual("files.pythonhosted.org", urllib.parse.urlparse(download_info.get('url')).netloc)
             self.assertEqual(f"sha256={_KNOWN_PUBLIC_131_SHA256SUM}", download_info['archive_info']['hash'], "sha256sum of downloaded package")
+            passed = True
+        finally:
+            self._print_log(not passed)
+
+    def test_install_publichigher_popular_no_input(self):
+        """User specifies --no-input."""
+        setup = TestSetup(
+            private_repo_packages=(get_package("1.3.0"),),
+            public_package_popularities=(PackagePopularity("sampleproject", Popularity(100, 200, 300)),),
+            dependency_declaration="sampleproject~=1.3.0",
+            popularity_threshold="50",
+            prompt_answer="yes",
+        )
+        passed = False
+        result = self._run_shypip(setup, ["--no-input"])
+        try:
+            result.assert_exit_code(self, 1)
+            result.assert_nothing_installed(self)
+            self.assertIn(MULTIPLE_SOURCES_MESSAGE_PREFIX, result.proc.stderr)
             passed = True
         finally:
             self._print_log(not passed)
@@ -177,7 +196,7 @@ class MainTest(TestCase):
         result = self._run_shypip(setup)
         self._assert_private_package_installed(setup, result)
 
-    def _run_shypip(self, setup: TestSetup) -> TestResult:
+    def _run_shypip(self, setup: TestSetup, more_install_args: List[str] = None) -> TestResult:
         packages_installed = self.virtual_env.list_installed_packages()
         repo_dir = Path(self.virtual_env.tempdir.name) / "repo"
         repo_dir.mkdir()
@@ -187,18 +206,19 @@ class MainTest(TestCase):
             self._prepare_cache_dir(package_name, popularity)
         with LocalRepositoryServer(repo_root=repo_dir) as server:
             server.start()
-            cmd =  self._shypip_cmd(setup, server)
+            cmd =  self._shypip_cmd(setup, server, more_install_args)
             env = self._env({
                 ENV_POPULARITY: setup.popularity_threshold,  # disable popularity check
                 ENV_PROMPT: setup.prompt_answer,
             })
             proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
             actual_packages_installed = self.virtual_env.list_installed_packages()
+            report_text = maybe_read_text(self.report_file)
             return TestResult(
                 proc=proc,
                 packages_installed_before=tuple(packages_installed),
                 packages_installed_after=tuple(actual_packages_installed),
-                install_report=InstallReport(self.report_file.read_text('utf-8')),
+                install_report=InstallReport(report_text),
             )
 
     def _print_log(self, always: bool = False):

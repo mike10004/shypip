@@ -475,7 +475,7 @@ class ShyCandidateEvaluator(CandidateEvaluator, ShyMixin):
                     self._shypip_options.log("best candidate after filtering:", best_candidate)
                     if self._shypip_options.is_untrusted(best_candidate):
                         if self.shypip_disallow_prompt:
-                            self._shypip_options.log("aborting due to resolution ambiguity")
+                            self._shypip_options.log("resolution ambiguous and prompt disabled; aborting")
                             error_msg = analysis.create_multiple_sources_error_message()
                             raise MultipleRepositoryCandidatesException(error_msg)
                         else:
@@ -487,8 +487,8 @@ class ShyCandidateEvaluator(CandidateEvaluator, ShyMixin):
                                 best_candidate = self.sort_best_candidate(applicable_candidates)
                 else:
                     self._shypip_options.log("resolution ambiguous and popularity check disabled")
-                    error_msg = analysis.create_multiple_sources_error_message()
-                    raise MultipleRepositoryCandidatesException(error_msg)
+                    applicable_candidates = self._refilter_candidates(applicable_candidates, trusted_only=True)
+                    best_candidate = self.sort_best_candidate(applicable_candidates)
                 return BestCandidateResult(
                     candidates,
                     applicable_candidates=applicable_candidates,
