@@ -134,8 +134,11 @@ class MainTest(TestCase):
             popularity_threshold="50",
             prompt_answer="no",
         )
-        passed = False
         result = self._run_shypip(setup)
+        self._assert_private_package_installed(setup, result)
+
+    def _assert_private_package_installed(self, setup: TestSetup, result: TestResult):
+        passed = False
         try:
             result.assert_exit_code(self, 0)
             self.assertIn(("sampleproject", "1.3.0"), result.packages_installed_after)
@@ -146,6 +149,17 @@ class MainTest(TestCase):
             passed = True
         finally:
             self._print_log(not passed)
+
+    def test_install_publichigher_unpopular(self):
+        setup = TestSetup(
+            private_repo_packages=(get_package("1.3.0"),),
+            public_package_popularities=(PackagePopularity("sampleproject", Popularity(100, 200, 300)),),
+            dependency_declaration="sampleproject~=1.3.0",
+            popularity_threshold="9999999",
+            prompt_answer="no",
+        )
+        result = self._run_shypip(setup)
+        self._assert_private_package_installed(setup, result)
 
     def test_othercase(self):
         passed = False
