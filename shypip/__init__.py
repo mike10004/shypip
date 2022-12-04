@@ -198,7 +198,6 @@ ShypipOptions.dump_config.__doc__ = f"flag that specifies program should print c
 ShypipOptions.prompt_answer.__doc__ = f"canned answer for input prompts; set by {ENV_PROMPT}"
 ShypipOptions.log_file.__doc__ = f"pathname of log file to append to; set by {ENV_LOG_FILE}"
 
-_OPTIONS_DEFAULTS = ShypipOptions()
 
 class PypiStatsResponse(NamedTuple):
 
@@ -358,6 +357,7 @@ class ShyMixin(object):
         package_finder.shypip_disallow_prompt = True if (hasattr(options, "no_input") and options.no_input) else False
         return package_finder
 
+
 class ResolvedPackage(NamedTuple):
 
     name: str
@@ -422,7 +422,9 @@ class CandidateOriginAnalysis(NamedTuple):
         return f"{_PROG}: {MULTIPLE_SOURCES_MESSAGE_PREFIX}{self.package_name()}: {self.summarize()}"
 
 
-def trusted_same_version(options: ShypipOptions, candidate: InstallationCandidate, candidates: List[InstallationCandidate]) -> Optional[InstallationCandidate]:
+def trusted_same_version(options: ShypipOptions,
+                         candidate: InstallationCandidate,
+                         candidates: List[InstallationCandidate]) -> Optional[InstallationCandidate]:
     if not options.is_untrusted(candidate):
         return candidate
     for potential in candidates:
@@ -431,12 +433,10 @@ def trusted_same_version(options: ShypipOptions, candidate: InstallationCandidat
                 return potential
 
 
-def prompt_for_explicit_allow(candidate: InstallationCandidate, canned_answer: str) -> bool:
-    if canned_answer:
-        answer = canned_answer
-    else:
-        answer = input(f"{_PROG}: installation candidate {candidate.name} {candidate.version} satisfies popularity threshold; allow (yes/no)? ")
-    return answer.lower().strip() == 'yes'
+class CandidateSearchResult(NamedTuple):
+
+    best_candidate: Optional[InstallationCandidate]
+    applicable_candidates: List[InstallationCandidate]
 
 
 class ShyCandidateEvaluator(CandidateEvaluator, ShyMixin):
@@ -458,12 +458,12 @@ class ShyCandidateEvaluator(CandidateEvaluator, ShyMixin):
         package_names = set(candidate.name for candidate in candidates)
         assert len(package_names) == 1, f"expect exactly one package name among {len(candidates)} candidates"
         package_name = package_names.pop()
-        popularity = None
+        cached_popularity = None
         def get_popularity():
-            nonlocal popularity
-            if popularity is None:
-                popularity = self.pypistats_cache.query_popularity(package_name)
-            return popularity
+            nonlocal cached_popularity
+            if cached_popularity is None:
+                cached_popularity = self.pypistats_cache.query_popularity(package_name)
+            return cached_popularity
         threshold = PopularityThreshold.parse(self._shypip_options.popularity_threshold)
         for candidate in candidates:
             if is_package_repo_candidate(candidate):
@@ -472,8 +472,8 @@ class ShyCandidateEvaluator(CandidateEvaluator, ShyMixin):
                     if not trusted_only:
                         # ignore if it's from an untrusted source whose popularity can't be queried
                         if self.pypistats_cache.is_query_supported(candidate.link.comes_from):
-                            popularity_ = get_popularity()
-                            if threshold.evaluate(popularity_):
+                            popularity = get_popularity()
+                            if threshold.evaluate(popularity):
                                 filtered.append(candidate)
                 else:
                     filtered.append(candidate)
@@ -482,6 +482,38 @@ class ShyCandidateEvaluator(CandidateEvaluator, ShyMixin):
         reanalysis = CandidateOriginAnalysis.analyze(filtered)
         self._shypip_options.log(len(candidates), "candidates popularity-filtered by threshold", threshold, "to", reanalysis.summarize())
         return filtered
+
+    def _prompt_for_explicit_allow(self, candidate: InstallationCandidate) -> bool:
+        canned_answer = self._shypip_options.prompt_answer
+        if canned_answer:
+            answer = canned_answer
+            self._shypip_options.log("using canned answer", repr(canned_answer))
+        else:
+            package = ResolvedPackage.from_candidate(candidate)
+            prompt_msg = f"{_PROG}: installation candidate {package.name} {package.version} from {package.origin} satisfies popularity threshold; allow (yes/no)? "
+            answer = input(prompt_msg)
+        return answer.lower().strip() == 'yes'
+
+    def _refilter_and_sort(self, applicable_candidates: List[InstallationCandidate], trusted_only: bool) -> CandidateSearchResult:
+        applicable_candidates = self._refilter_candidates(applicable_candidates, trusted_only=trusted_only)
+        best_candidate = self.sort_best_candidate(applicable_candidates)
+        return CandidateSearchResult(best_candidate, applicable_candidates)
+
+    def _check_popularity(self, analysis: CandidateOriginAnalysis, applicable_candidates: List[InstallationCandidate]) -> CandidateSearchResult:
+        best_candidate, applicable_candidates = self._refilter_and_sort(applicable_candidates, trusted_only=False)
+        self._shypip_options.log("best candidate after filtering:", best_candidate)
+        if self._shypip_options.is_untrusted(best_candidate):
+            if self.shypip_disallow_prompt:
+                self._shypip_options.log("resolution ambiguous and prompt disabled; aborting")
+                error_msg = analysis.create_multiple_sources_error_message()
+                raise MultipleRepositoryCandidatesException(error_msg)
+            else:
+                explicit_allow = self._prompt_for_explicit_allow(best_candidate)
+                if explicit_allow:
+                    self._shypip_options.log("user explicitly allowed", best_candidate)
+                else:
+                    best_candidate, applicable_candidates = self._refilter_and_sort(applicable_candidates, trusted_only=True)
+        return CandidateSearchResult(best_candidate, applicable_candidates)
 
     def compute_best_candidate(self, candidates: List[InstallationCandidate]) -> BestCandidateResult:
         result = super().compute_best_candidate(candidates)
@@ -497,28 +529,12 @@ class ShyCandidateEvaluator(CandidateEvaluator, ShyMixin):
                     best_candidate = equivalent_trusted
                 else:
                     if self._shypip_options.is_popularity_check_enabled():
-                        # refilter applicable candidates using popularity criteria
-                        applicable_candidates = self._refilter_candidates(applicable_candidates)
-                        best_candidate = self.sort_best_candidate(applicable_candidates)
-                        self._shypip_options.log("best candidate after filtering:", best_candidate)
-                        if self._shypip_options.is_untrusted(best_candidate):
-                            if self.shypip_disallow_prompt:
-                                self._shypip_options.log("resolution ambiguous and prompt disabled; aborting")
-                                error_msg = analysis.create_multiple_sources_error_message()
-                                raise MultipleRepositoryCandidatesException(error_msg)
-                            else:
-                                explicit_allow = prompt_for_explicit_allow(best_candidate, self._shypip_options.prompt_answer)
-                                if explicit_allow:
-                                    self._shypip_options.log("user explicitly allowed", best_candidate)
-                                else:
-                                    applicable_candidates = self._refilter_candidates(applicable_candidates, trusted_only=True)
-                                    best_candidate = self.sort_best_candidate(applicable_candidates)
+                        best_candidate, applicable_candidates = self._check_popularity(analysis, applicable_candidates)
                     else:
                         self._shypip_options.log("resolution ambiguous and popularity check disabled")
-                        applicable_candidates = self._refilter_candidates(applicable_candidates, trusted_only=True)
-                        best_candidate = self.sort_best_candidate(applicable_candidates)
+                        best_candidate, applicable_candidates = self._refilter_and_sort(applicable_candidates, trusted_only=True)
                 return BestCandidateResult(
-                    candidates,
+                    candidates=candidates,
                     applicable_candidates=applicable_candidates,
                     best_candidate=best_candidate,
                 )
