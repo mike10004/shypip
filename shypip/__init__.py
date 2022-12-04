@@ -51,6 +51,7 @@ ENV_LOG_FILE = f"{_ENV_PREFIX}LOG_FILE"
 ENV_PYPISTATS_API_URL = f"{_ENV_PREFIX}PYPISTATS_API_URL"
 ENV_MAX_CACHE_AGE = f"{_ENV_PREFIX}MAX_CACHE_AGE"
 ENV_DUMP_CONFIG = f"{_ENV_PREFIX}DUMP_CONFIG"
+ENV_PROMPT = f"{_ENV_PREFIX}PROMPT"
 MULTIPLE_SOURCES_MESSAGE_PREFIX="multiple possible repository sources for "
 Pathish = Union[str, Path]
 DEFAULT_MAX_CACHE_AGE = timedelta(hours=24)
@@ -114,6 +115,7 @@ class ShypipOptions(NamedTuple):
     pypistats_api_url: str = "https://pypistats.org/api"
     max_cache_age_minutes: str = "1440"
     dump_config: str = ""
+    prompt_answer: str = ""
     log_file: str = ""
 
     def log(self, *messages):
@@ -176,6 +178,7 @@ ShypipOptions.cache_dir.__doc__ = f"pypistats cache directory; set by {ENV_CACHE
 ShypipOptions.pypistats_api_url.__doc__ = f"pypistats API URL; set by {ENV_PYPISTATS_API_URL}"
 ShypipOptions.max_cache_age_minutes.__doc__ = f"max age in minutes for trusting pypistats cache data {ENV_MAX_CACHE_AGE}"
 ShypipOptions.dump_config.__doc__ = f"flag that specifies program should print config and exit; set by {ENV_DUMP_CONFIG}"
+ShypipOptions.prompt_answer.__doc__ = f"canned answer for input prompts; set by {ENV_PROMPT}"
 ShypipOptions.log_file.__doc__ = f"pathname of log file to append to; set by {ENV_LOG_FILE}"
 
 _OPTIONS_DEFAULTS = ShypipOptions()
@@ -320,7 +323,7 @@ class ShyMixin(object):
                               options: Values,
                               session: PipSession,
                               target_python: Optional[TargetPython] = None,
-                              ignore_requires_python: Optional[bool] = None) -> PackageFinder:
+                              ignore_requires_python: Optional[bool] = None) -> 'ShyPackageFinder':
         link_collector = LinkCollector.create(session, options=options)
         # noinspection PyUnresolvedReferences
         selection_prefs = SelectionPreferences(
@@ -330,11 +333,13 @@ class ShyMixin(object):
             prefer_binary=options.prefer_binary,
             ignore_requires_python=ignore_requires_python,
         )
-        return ShyPackageFinder.create(
+        package_finder = ShyPackageFinder.create(
             link_collector=link_collector,
             selection_prefs=selection_prefs,
             target_python=target_python,
         )
+        package_finder.shypip_disallow_prompt = True if (hasattr(options, "no_input") and options.no_input) else False
+        return package_finder
 
 class ResolvedPackage(NamedTuple):
 
@@ -346,6 +351,7 @@ class ResolvedPackage(NamedTuple):
     @staticmethod
     def from_candidate(candidate: InstallationCandidate) -> 'ResolvedPackage':
         return ResolvedPackage(candidate.name, str(candidate.version), candidate.link.comes_from, candidate.link.url)
+
 
 class CandidateOriginAnalysis(NamedTuple):
 
@@ -400,7 +406,17 @@ class CandidateOriginAnalysis(NamedTuple):
         return f"{_PROG}: {MULTIPLE_SOURCES_MESSAGE_PREFIX}{self.package_name()}: {self.summarize()}"
 
 
+def prompt_for_explicit_allow(candidate: InstallationCandidate, canned_answer: str, instream: TextIO = sys.stdin) -> bool:
+    if canned_answer:
+        answer = canned_answer
+    else:
+        answer = input(f"{_PROG}: installation candidate {candidate.name} {candidate.version} satisfies popularity threshold; allow (yes/no)? ")
+    return answer.lower().strip() == 'yes'
+
+
 class ShyCandidateEvaluator(CandidateEvaluator, ShyMixin):
+
+    shypip_disallow_prompt = False
 
     @cached_property
     def pypistats_cache(self) -> PypiStatsCache:
@@ -410,7 +426,7 @@ class ShyCandidateEvaluator(CandidateEvaluator, ShyMixin):
     def _error_sink(self) -> TextIO:
         return sys.stderr
 
-    def _refilter_candidates(self, candidates: List[InstallationCandidate]) -> List[InstallationCandidate]:
+    def _refilter_candidates(self, candidates: List[InstallationCandidate], trusted_only: bool = False) -> List[InstallationCandidate]:
         if not candidates:
             return []
         filtered = []
@@ -426,11 +442,13 @@ class ShyCandidateEvaluator(CandidateEvaluator, ShyMixin):
         threshold = PopularityThreshold.parse(self._shypip_options.popularity_threshold)
         for candidate in candidates:
             if is_package_repo_candidate(candidate):
-                if self._shypip_options.is_untrusted(candidate):
-                    # ignore if it's from an untrusted source whose popularity can't be queried
-                    if self.pypistats_cache.is_query_supported(candidate.link.comes_from):
-                        if threshold.evaluate(get_popularity()):
-                            filtered.append(candidate)
+                untrusted = self._shypip_options.is_untrusted(candidate)
+                if untrusted:
+                    if not trusted_only:
+                        # ignore if it's from an untrusted source whose popularity can't be queried
+                        if self.pypistats_cache.is_query_supported(candidate.link.comes_from):
+                            if threshold.evaluate(get_popularity()):
+                                filtered.append(candidate)
                 else:
                     filtered.append(candidate)
             else:
@@ -452,8 +470,20 @@ class ShyCandidateEvaluator(CandidateEvaluator, ShyMixin):
                     applicable_candidates = self._refilter_candidates(applicable_candidates)
                     best_candidate = self.sort_best_candidate(applicable_candidates)
                     self._shypip_options.log("best candidate after filtering:", best_candidate)
+                    if self._shypip_options.is_untrusted(best_candidate):
+                        if self.shypip_disallow_prompt:
+                            self._shypip_options.log("aborting due to resolution ambiguity")
+                            error_msg = analysis.create_multiple_sources_error_message()
+                            raise MultipleRepositoryCandidatesException(error_msg)
+                        else:
+                            explicit_allow = prompt_for_explicit_allow(best_candidate, self._shypip_options.prompt_answer)
+                            if explicit_allow:
+                                self._shypip_options.log("user explicitly allowed", best_candidate)
+                            else:
+                                applicable_candidates = self._refilter_candidates(applicable_candidates)
+                                best_candidate = self.sort_best_candidate(applicable_candidates)
                 else:
-                    self._shypip_options.log("returning result with no applicable candidates due to resolution ambiguity")
+                    self._shypip_options.log("resolution ambiguous and popularity check disabled")
                     error_msg = analysis.create_multiple_sources_error_message()
                     raise MultipleRepositoryCandidatesException(error_msg)
                 return BestCandidateResult(
@@ -466,6 +496,8 @@ class ShyCandidateEvaluator(CandidateEvaluator, ShyMixin):
 
 class ShyPackageFinder(PackageFinder):
 
+    shypip_disallow_prompt = False
+
     def make_candidate_evaluator(
             self,
             project_name: str,
@@ -474,7 +506,7 @@ class ShyPackageFinder(PackageFinder):
     ) -> CandidateEvaluator:
         """Create a CandidateEvaluator object to use."""
         candidate_prefs = self._candidate_prefs
-        return ShyCandidateEvaluator.create(
+        candidate_evaluator = ShyCandidateEvaluator.create(
             project_name=project_name,
             target_python=self._target_python,
             prefer_binary=candidate_prefs.prefer_binary,
@@ -482,6 +514,8 @@ class ShyPackageFinder(PackageFinder):
             specifier=specifier,
             hashes=hashes,
         )
+        candidate_evaluator.shypip_disallow_prompt = self.shypip_disallow_prompt
+        return candidate_evaluator
 
 
 class ShyInstallCommand(InstallCommand, ShyMixin):
@@ -494,7 +528,8 @@ class ShyInstallCommand(InstallCommand, ShyMixin):
                               session: PipSession,
                               target_python: Optional[TargetPython] = None,
                               ignore_requires_python: Optional[bool] = None) -> PackageFinder:
-        return self._build_shy_package_finder(options, session, target_python, ignore_requires_python)
+        package_finder: ShyPackageFinder = self._build_shy_package_finder(options, session, target_python, ignore_requires_python)
+        return package_finder
 
 
 class ShyDownloadCommand(DownloadCommand, ShyMixin):
