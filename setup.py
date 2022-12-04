@@ -17,7 +17,7 @@ long_description = (here / "README.md").read_text(encoding="utf-8")
 
 setup(
     name="shypip",
-    version="0.2.1",
+    version="0.3.0",
     description="more secure pip for hybrid public-private repository configurations",
     long_description=long_description,
     long_description_content_type="text/markdown",
