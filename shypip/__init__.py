@@ -355,7 +355,7 @@ class ResolvedPackage(NamedTuple):
 
 class CandidateOriginAnalysis(NamedTuple):
 
-    by_origin: FrozenSet[Tuple[str, Tuple[ResolvedPackage, ...]]]
+    by_origin: FrozenSet[Tuple[str, Tuple[ResolvedPackage, ...]]]  # map of link.comes_from URL domain to tuple of packages
 
     def to_dict(self) -> Dict[str, List[ResolvedPackage]]:
         return dict((k, list(v)) for k, v in self.by_origin)
@@ -404,6 +404,15 @@ class CandidateOriginAnalysis(NamedTuple):
 
     def create_multiple_sources_error_message(self):
         return f"{_PROG}: {MULTIPLE_SOURCES_MESSAGE_PREFIX}{self.package_name()}: {self.summarize()}"
+
+
+def trusted_same_version(options: ShypipOptions, candidate: InstallationCandidate, candidates: List[InstallationCandidate]) -> Optional[InstallationCandidate]:
+    if not options.is_untrusted(candidate):
+        return candidate
+    for potential in candidates:
+        if potential.version == candidate.version:
+            if not options.is_untrusted(potential):
+                return potential
 
 
 def prompt_for_explicit_allow(candidate: InstallationCandidate, canned_answer: str) -> bool:
@@ -468,27 +477,31 @@ class ShyCandidateEvaluator(CandidateEvaluator, ShyMixin):
             self._shypip_options.log(result.best_candidate.name, "best candidate is version", result.best_candidate.version)
             if analysis.is_ambiguous():
                 self._shypip_options.log(result.best_candidate.name, "is provided by multiple sources; candidates by origin:", analysis.to_dict())
-                if self._shypip_options.is_popularity_check_enabled():
-                    # refilter applicable candidates using popularity criteria
-                    applicable_candidates = self._refilter_candidates(applicable_candidates)
-                    best_candidate = self.sort_best_candidate(applicable_candidates)
-                    self._shypip_options.log("best candidate after filtering:", best_candidate)
-                    if self._shypip_options.is_untrusted(best_candidate):
-                        if self.shypip_disallow_prompt:
-                            self._shypip_options.log("resolution ambiguous and prompt disabled; aborting")
-                            error_msg = analysis.create_multiple_sources_error_message()
-                            raise MultipleRepositoryCandidatesException(error_msg)
-                        else:
-                            explicit_allow = prompt_for_explicit_allow(best_candidate, self._shypip_options.prompt_answer)
-                            if explicit_allow:
-                                self._shypip_options.log("user explicitly allowed", best_candidate)
-                            else:
-                                applicable_candidates = self._refilter_candidates(applicable_candidates, trusted_only=True)
-                                best_candidate = self.sort_best_candidate(applicable_candidates)
+                equivalent_trusted = trusted_same_version(self._shypip_options, result.best_candidate, applicable_candidates)
+                if equivalent_trusted is not None:
+                    best_candidate = equivalent_trusted
                 else:
-                    self._shypip_options.log("resolution ambiguous and popularity check disabled")
-                    applicable_candidates = self._refilter_candidates(applicable_candidates, trusted_only=True)
-                    best_candidate = self.sort_best_candidate(applicable_candidates)
+                    if self._shypip_options.is_popularity_check_enabled():
+                        # refilter applicable candidates using popularity criteria
+                        applicable_candidates = self._refilter_candidates(applicable_candidates)
+                        best_candidate = self.sort_best_candidate(applicable_candidates)
+                        self._shypip_options.log("best candidate after filtering:", best_candidate)
+                        if self._shypip_options.is_untrusted(best_candidate):
+                            if self.shypip_disallow_prompt:
+                                self._shypip_options.log("resolution ambiguous and prompt disabled; aborting")
+                                error_msg = analysis.create_multiple_sources_error_message()
+                                raise MultipleRepositoryCandidatesException(error_msg)
+                            else:
+                                explicit_allow = prompt_for_explicit_allow(best_candidate, self._shypip_options.prompt_answer)
+                                if explicit_allow:
+                                    self._shypip_options.log("user explicitly allowed", best_candidate)
+                                else:
+                                    applicable_candidates = self._refilter_candidates(applicable_candidates, trusted_only=True)
+                                    best_candidate = self.sort_best_candidate(applicable_candidates)
+                    else:
+                        self._shypip_options.log("resolution ambiguous and popularity check disabled")
+                        applicable_candidates = self._refilter_candidates(applicable_candidates, trusted_only=True)
+                        best_candidate = self.sort_best_candidate(applicable_candidates)
                 return BestCandidateResult(
                     candidates,
                     applicable_candidates=applicable_candidates,

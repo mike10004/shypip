@@ -131,7 +131,7 @@ class MainTest(TestCase):
         finally:
             self._print_log(not passed)
 
-    def test_install_publichigher_popular_no_input(self):
+    def test_install_publichigher_popular_noinput(self):
         """User specifies --no-input."""
         setup = TestSetup(
             private_repo_packages=(get_package("1.3.0"),),
@@ -151,7 +151,6 @@ class MainTest(TestCase):
             self._print_log(not passed)
 
     def test_install_publichigher_popularitydisabled(self):
-        """User specifies --no-input."""
         setup = TestSetup(
             private_repo_packages=(get_package("1.3.0"),),
             public_package_popularities=(PackagePopularity("sampleproject", Popularity(100, 200, 300)),),
@@ -174,6 +173,17 @@ class MainTest(TestCase):
             prompt_answer="no",
         )
         result = self._run_shypip(setup)
+        self._assert_private_package_installed(setup, result)
+
+    def test_install_sameversion_noinput(self):
+        setup = TestSetup(
+            private_repo_packages=(get_package("1.3.1"),),
+            public_package_popularities=(PackagePopularity("sampleproject", Popularity(100, 200, 300)),),
+            dependency_declaration="sampleproject~=1.3.0",
+            popularity_threshold="50",
+            prompt_answer="no",
+        )
+        result = self._run_shypip(setup, ["--no-input"])
         self._assert_private_package_installed(setup, result)
 
     def _assert_private_package_installed(self, setup: TestSetup, result: TestResult):
