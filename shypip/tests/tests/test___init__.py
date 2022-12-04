@@ -15,4 +15,4 @@ class LocalRepositoryServerTest(TestCase):
             readme_url = server.url("/README.txt")
             with urllib.request.urlopen(readme_url) as rsp:
                 content = rsp.read().decode('utf-8')
-                self.assertEqual("Local repository for testing", content.strip())
+                self.assertIn("Local repository for testing", content.strip())

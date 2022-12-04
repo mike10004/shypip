@@ -1,20 +1,25 @@
 #!/usr/bin/env python3
 
-import contextlib
-import datetime
 import io
+import os
+import glob
+import datetime
+import hashlib
 import tempfile
+import contextlib
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
 
+import shypip.tests
 from shypip import FilePypiStatsCache
-from shypip import MULTIPLE_SOURCES_MESSAGE_PREFIX
+from shypip import ENV_POPULARITY
 from shypip import Popularity
 from shypip import ShyDownloadCommand
 from shypip import ShypipOptions
 from shypip import _default_cache_dir
 from shypip.tests import LocalRepositoryServer
+from shypip.tests import environment_context
 
 
 class DownloadCommandTest(TestCase):
@@ -30,30 +35,46 @@ class DownloadCommandTest(TestCase):
 
     def test_download_find_candidates(self):
         from pip._internal.cli.main_parser import parse_command
-        import unittest.mock
         command = ShyDownloadCommand("download", "Download packages.", isolated=False)
         with TemporaryDirectory(prefix="shypiptest_") as tempdir:
-            with LocalRepositoryServer() as server:
+            download_dir = Path(tempdir) / "download"
+            download_dir.mkdir()
+            repo_dir = Path(tempdir) / "repo"
+            repo_dir.mkdir()
+            package_130 = shypip.tests.get_package(name="sampleproject", version="1.3.0")
+            package_130.publish(repo_dir)
+            with LocalRepositoryServer(repo_root=repo_dir) as server:
                 server.start()
                 pip_args = [
                     "--disable-pip-version-check",
                     "--no-color",
-                    "--quiet",
                     "--no-input",
                     "--no-cache-dir",
                     "download",
-                    "--dest", tempdir,
+                    "--dest", str(download_dir),
                     "--progress-bar", "off",
-                    "sampleproject>=1.9.0",
+                    "--no-deps",
+                    "sampleproject~=1.3.0",
                     "--extra-index-url", server.url(host="localhost"),
                 ]
                 cmd_name, cmd_args = parse_command(pip_args)
+                stdout_buffer = io.StringIO()
                 stderr_buffer = io.StringIO()
-                with unittest.mock.patch.dict("os.environ", {ShypipOptions.get_related_env_var_name("popularity_threshold"): ""}, clear=True):
-                    with contextlib.redirect_stderr(stderr_buffer):
-                        exit_code = command.main(cmd_args)
-                self.assertEqual(1, exit_code, f"expected exit code:\n\n{stderr_buffer.getvalue()}")
-                self.assertIn(MULTIPLE_SOURCES_MESSAGE_PREFIX, stderr_buffer.getvalue())
+                with environment_context({ENV_POPULARITY: ""}):
+                    with contextlib.redirect_stdout(stdout_buffer):
+                        with contextlib.redirect_stderr(stderr_buffer):
+                            exit_code = command.main(cmd_args)
+                self.assertEqual(0, exit_code, f"expected exit code:\n\n{stdout_buffer.getvalue()}\n\n{stderr_buffer.getvalue()}")
+                downloaded_files = glob.glob(os.path.join(download_dir, "*.*"))
+                self.assertEqual(1, len(downloaded_files), f"expected one file in download dir:\n\n{stdout_buffer.getvalue()}\n\n{stderr_buffer.getvalue()}")
+                downloaded_file = downloaded_files.pop()
+                with open(downloaded_file, "rb") as ifile:
+                    h = hashlib.sha256()
+                    h.update(ifile.read())
+                    downloaded_hash = h.hexdigest()
+                self.assertEqual(package_130.sha256sum, downloaded_hash, "expect hash match of downloaded to private package")
+
+
 
 
 class FilePypiStatsCacheTest(TestCase):

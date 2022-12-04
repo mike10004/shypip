@@ -9,6 +9,7 @@ import socket
 import platform
 import threading
 import subprocess
+import unittest.mock
 from tempfile import TemporaryDirectory
 from pathlib import Path
 from http import HTTPStatus
@@ -276,3 +277,7 @@ class InstallReport(NamedTuple):
         for item in report.get('install', []):
             if item.get('metadata', {}).get('name', None) == package_name:
                 return item.get('download_info', {})
+
+
+def environment_context(env: Dict[str, str]):
+    return unittest.mock.patch.dict("os.environ", env, clear=True)
