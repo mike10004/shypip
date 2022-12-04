@@ -55,6 +55,10 @@ ENV_PROMPT = f"{_ENV_PREFIX}PROMPT"
 MULTIPLE_SOURCES_MESSAGE_PREFIX="multiple possible repository sources for "
 Pathish = Union[str, Path]
 DEFAULT_MAX_CACHE_AGE = timedelta(hours=24)
+Junction = Callable[[Iterable[bool]], bool]  # function like 'any' or 'all'
+
+def is_truthy(value: Any) -> bool:
+    return str(value).lower() in {'1', 'yes', 'true'}
 
 
 class Popularity(NamedTuple):
@@ -63,8 +67,6 @@ class Popularity(NamedTuple):
     last_week: int = 0
     last_month: int = 0
 
-
-Junction = Callable[[Iterable[bool]], bool]  # function like 'any' or 'all'
 
 class PopularityThreshold(NamedTuple):
 
@@ -604,7 +606,7 @@ class ShyDownloadCommand(DownloadCommand, ShyMixin):
 # noinspection PyProtectedMember
 def main(argv1: List[str] = None, getenv = os.getenv) -> int:
     shypip_options = ShypipOptions.create(getenv)
-    if str(shypip_options.dump_config).lower() in {"1", "true", "yes"}:
+    if is_truthy(str(shypip_options.dump_config)):
         shypip_options.print_config(sys.stderr)
         return 0
     import pip._internal.cli.main
@@ -625,4 +627,3 @@ def main(argv1: List[str] = None, getenv = os.getenv) -> int:
 
 if __name__ == '__main__':
     exit(main())
-
