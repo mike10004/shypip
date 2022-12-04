@@ -111,7 +111,7 @@ class MainTest(TestCase):
             cmd += more_install_args
         return cmd
 
-    def test_install_publichigher_popular_promptyes(self):
+    def test_install_publichigher_popular_promptaccept(self):
         setup = TestSetup(
             private_repo_packages=(get_package("1.3.0"),),
             public_package_popularities=(PackagePopularity("sampleproject", Popularity(100, 200, 300)),),
@@ -150,7 +150,22 @@ class MainTest(TestCase):
         finally:
             self._print_log(not passed)
 
-    def test_install_publichigher_popular_promptno(self):
+    def test_install_publichigher_popularitydisabled(self):
+        """User specifies --no-input."""
+        setup = TestSetup(
+            private_repo_packages=(get_package("1.3.0"),),
+            public_package_popularities=(PackagePopularity("sampleproject", Popularity(100, 200, 300)),),
+            dependency_declaration="sampleproject~=1.3.0",
+            popularity_threshold="",
+            prompt_answer="yes",
+        )
+        result = self._run_shypip(setup)
+        self._assert_private_package_installed(setup, result)
+        with open(self.log_file, "r") as ifile:
+            log_lines = [line.rstrip() for line in ifile]
+            self.assertIn("resolution ambiguous and popularity check disabled", log_lines)
+
+    def test_install_publichigher_popular_promptreject(self):
         setup = TestSetup(
             private_repo_packages=(get_package("1.3.0"),),
             public_package_popularities=(PackagePopularity("sampleproject", Popularity(100, 200, 300)),),
